@@ -240,3 +240,15 @@ conda install scikit-learn
 conda install django
 get-command -CommandType function -listimported *
 updateall
+get-command -CommandType function -listimported *
+Get-BIOSInfo
+get-error -verbose -Newest -Debug
+get-error -verbose -Debug
+diag
+helpme
+Test-ProfileHealth
+get-command -CommandType function -listimported *
+Update-HelpProfile
+get-error -verbose
+get-error -verbose -Debug
+get-error -Debug

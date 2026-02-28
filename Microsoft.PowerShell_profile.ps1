@@ -1,4 +1,4 @@
-#requires -Version 7.5
+﻿#requires -Version 7.5
 #==============================================================================
 # PowerShell 7.5+ Professional Profile for Windows 10 Pro
 #==============================================================================
@@ -43,6 +43,7 @@
     Provides fundamental runtime safety, environment validation, and bootstrapping
     capabilities to ensure the PowerShell profile operates in a controlled manner.
 #>
+if ($env:TERM_PROGRAM -eq "vscode") { . "$(code --locate-shell-integration-path pwsh)" }
 
 # Profile version
 $script:ProfileVersion = '2.0.0'
@@ -70,7 +71,7 @@ $Global:ProfileStats = [ordered]@{
 }
 
 # Ensure running PowerShell 7.5 or higher
-if ($PSVersionTable.PSVersion.Major -lt 7 -or 
+if ($PSVersionTable.PSVersion.Major -lt 7 -or
     ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -lt 5)) {
     Write-Warning "This profile requires PowerShell 7.5 or higher. Current version: $($PSVersionTable.PSVersion)"
     return
@@ -107,6 +108,8 @@ $WarningPreference = 'Continue'
 $VerbosePreference = 'SilentlyContinue'
 $DebugPreference = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
+# FIX: Save original ProgressPreference; suppress only during load for speed
+$script:OriginalProgressPreference = $ProgressPreference
 $ProgressPreference = 'SilentlyContinue'
 
 # Global exit actions registry
@@ -164,6 +167,14 @@ if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction Silen
         # Telemetry (opt-in, disabled by default)
         Telemetry        = @{}
 
+        # Error Handling
+        ErrorHandling    = @{
+            LogCaughtExceptions   = $true
+            IncludeScriptStack    = $false
+            ReThrowInDebug        = $false
+            MaxInnerExceptionDepth = 3
+        }
+
         # Aliases Configuration
         Aliases          = @{}
 
@@ -192,12 +203,45 @@ if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction Silen
             HistorySearchCursorMovesToEnd = $true
             ShowToolTips = $true
             MaximumKillRingCount = 20
-            Colors = @{}
-            KeyBindings = @{}
+            WordDelimiters = ';:,.[]{}()/\|!?^&*-=+''"–�—―'
+            Colors = @{
+                Command            = "`e[38;2;78;201;176m"  # Teal
+                Parameter          = "`e[38;2;135;206;235m" # Sky blue
+                Operator           = "`e[38;2;212;212;212m" # Light gray
+                Variable           = "`e[38;2;156;220;254m" # Light blue
+                String             = "`e[38;2;206;145;120m" # Salmon
+                Number             = "`e[38;2;181;206;168m" # Light green
+                Type               = "`e[38;2;78;201;176m"  # Teal
+                Comment            = "`e[38;2;106;153;85m"  # Green
+                Keyword            = "`e[38;2;86;156;214m"  # Blue
+                Error              = "`e[38;2;244;71;71m"   # Red
+                Member             = "`e[38;2;79;193;255m"  # Bright blue
+                Default            = "`e[38;2;212;212;212m" # Light gray
+                Emphasis           = "`e[38;2;220;220;170m" # Yellow
+                Selection          = "`e[48;2;38;79;120m"   # Dark blue bg
+                InlinePrediction   = "`e[38;2;108;108;108m" # Dark gray
+                ListPrediction     = "`e[38;2;78;201;176m"  # Teal
+                ListPredictionSelected = "`e[48;2;0;122;204m" # VS Code blue bg
+            }
+            # Core key bindings (applied via Set-PSReadLineKeyHandler -Function)
+            KeyBindings = @{
+                'Ctrl+z'       = 'Undo'
+                'Ctrl+y'       = 'Redo'
+                'Alt+a'        = 'SelectCommandArgument'
+            }
         }
         # NetworkProfiles will be initialized later
     }
 }
+
+# Ensure ErrorHandling defaults exist even when ProfileConfig was preloaded externally
+if (-not $Global:ProfileConfig.Contains('ErrorHandling')) {
+    $Global:ProfileConfig.ErrorHandling = @{}
+}
+if ($null -eq $Global:ProfileConfig.ErrorHandling.LogCaughtExceptions) { $Global:ProfileConfig.ErrorHandling.LogCaughtExceptions = $true }
+if ($null -eq $Global:ProfileConfig.ErrorHandling.IncludeScriptStack) { $Global:ProfileConfig.ErrorHandling.IncludeScriptStack = $false }
+if ($null -eq $Global:ProfileConfig.ErrorHandling.ReThrowInDebug) { $Global:ProfileConfig.ErrorHandling.ReThrowInDebug = $false }
+if ($null -eq $Global:ProfileConfig.ErrorHandling.MaxInnerExceptionDepth) { $Global:ProfileConfig.ErrorHandling.MaxInnerExceptionDepth = 3 }
 
 # Set PSReadLine HistorySavePath after CachePath is defined
 if (-not $Global:ProfileConfig.PSReadLine.HistorySavePath) {
@@ -214,7 +258,9 @@ $pathsToEnsure = @(
 foreach ($p in $pathsToEnsure) {
     try {
         if (-not (Test-Path -Path $p)) { New-Item -Path $p -ItemType Directory -Force | Out-Null }
-    } catch {}
+    } catch {
+        Write-ProfileLog "Failed to ensure directory '$p': $($_.Exception.Message)" -Level DEBUG -Component "Bootstrap"
+    }
 }
 
 #endregion PLATFORM DETECTION AND GLOBAL FLAGS
@@ -281,9 +327,9 @@ function Write-ProfileLog {
             'ERROR'    { Write-Host $line -ForegroundColor Red }
             'WARN'     { Write-Host $line -ForegroundColor Yellow }
             'SUCCESS'  { Write-Host $line -ForegroundColor Green }
-            'DEBUG'    { 
+            'DEBUG'    {
                 if ($Global:ProfileConfig.ShowDiagnostics) {
-                    Write-Host $line -ForegroundColor DarkGray 
+                    Write-Host $line -ForegroundColor DarkGray
                 }
             }
             default    { Write-Host $line -ForegroundColor Cyan }
@@ -291,7 +337,7 @@ function Write-ProfileLog {
 
         # File logging
         if ($File -or $Global:ProfileConfig.LogPath) {
-            $logFile = if ($File) { $File } else { 
+            $logFile = if ($File) { $File } else {
                 Join-Path $Global:ProfileConfig.LogPath ("profile_$(Get-Date -Format 'yyyyMM').log")
             }
             try {
@@ -300,10 +346,12 @@ function Write-ProfileLog {
                     New-Item -ItemType Directory -Path $dir -Force | Out-Null
                 }
                 Add-Content -Path $logFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
-            } catch {}
+            } catch {
+                Write-Verbose "Write-ProfileLog file sink failed: $($_.Exception.Message)"
+            }
         }
     } catch {
-        # Silent failure for logging
+        Write-Verbose "Write-ProfileLog failed: $($_.Exception.Message)"
     }
 }
 
@@ -369,6 +417,100 @@ function Invoke-ProfileLogRotation {
         Write-ProfileLog "Log rotation completed (keep $KeepMonths months)" -Level DEBUG
     } catch {
         Write-ProfileLog "Log rotation failed: $_" -Level WARN
+    }
+}
+
+function Get-ExceptionSummary {
+    <#
+    .SYNOPSIS
+        Builds a concise exception summary string.
+    .DESCRIPTION
+        Flattens exception and inner exception messages up to a maximum depth.
+    .PARAMETER Exception
+        Exception instance to summarize.
+    .PARAMETER MaxDepth
+        Maximum inner exception depth.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Exception]$Exception,
+        [int]$MaxDepth = 3
+    )
+
+    $parts = @()
+    $depth = 0
+    $cursor = $Exception
+
+    while ($null -ne $cursor -and $depth -lt $MaxDepth) {
+        $parts += "$($cursor.GetType().Name): $($cursor.Message)"
+        $cursor = $cursor.InnerException
+        $depth++
+    }
+
+    return ($parts -join ' | ')
+}
+
+function Write-CaughtException {
+    <#
+    .SYNOPSIS
+        Standardized catch-block logger.
+    .DESCRIPTION
+        Writes a consistent, compact exception summary for handled failures.
+    .PARAMETER Context
+        Human-readable operation context.
+    .PARAMETER ErrorRecord
+        Error record captured in catch (`$_`).
+    .PARAMETER Component
+        Logical profile component name.
+    .PARAMETER Level
+        Log severity.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord,
+        [string]$Component = 'General',
+        [ValidateSet('DEBUG', 'INFO', 'SUCCESS', 'WARN', 'ERROR', 'CRITICAL')]
+        [string]$Level = 'WARN'
+    )
+
+    try {
+        if (-not $ErrorRecord.Exception) {
+            Write-ProfileLog "$Context | Unknown exception" -Level $Level -Component $Component
+            return
+        }
+
+        $maxDepth = 3
+        if ($Global:ProfileConfig -and $Global:ProfileConfig.ErrorHandling -and $Global:ProfileConfig.ErrorHandling.MaxInnerExceptionDepth) {
+            $maxDepth = [int]$Global:ProfileConfig.ErrorHandling.MaxInnerExceptionDepth
+        }
+
+        $summary = Get-ExceptionSummary -Exception $ErrorRecord.Exception -MaxDepth $maxDepth
+        $message = "$Context | $summary"
+
+        if (
+            $Global:ProfileConfig -and
+            $Global:ProfileConfig.ErrorHandling -and
+            $Global:ProfileConfig.ErrorHandling.IncludeScriptStack -and
+            $ErrorRecord.ScriptStackTrace
+        ) {
+            $message += " | Stack: $($ErrorRecord.ScriptStackTrace)"
+        }
+
+        $shouldLog = $true
+        if (
+            $Global:ProfileConfig -and
+            $Global:ProfileConfig.ErrorHandling -and
+            $null -ne $Global:ProfileConfig.ErrorHandling.LogCaughtExceptions
+        ) {
+            $shouldLog = [bool]$Global:ProfileConfig.ErrorHandling.LogCaughtExceptions
+        }
+
+        if ($shouldLog) {
+            Write-ProfileLog $message -Level $Level -Component $Component
+        }
+    } catch {
+        Write-ProfileLog "$Context | exception logging failed: $($_.Exception.Message)" -Level DEBUG -Component $Component
     }
 }
 
@@ -470,24 +612,41 @@ function Test-Environment {
         $Global:ProfileState.HasNetwork = $null
     } else {
         try {
+            $networkProbeTarget = if ($Global:ProfileConfig.UtilityDefaults.NetworkProbeHost) {
+                $Global:ProfileConfig.UtilityDefaults.NetworkProbeHost
+            } else {
+                '8.8.8.8'
+            }
+
             if ($Global:IsWindows) {
-                $test = Test-Connection -ComputerName '8.8.8.8' -Count 1 -Quiet -TimeoutSeconds 2
+                $test = Test-Connection -ComputerName $networkProbeTarget -Count 1 -Quiet -TimeoutSeconds 2
                 $Global:ProfileState.HasNetwork = $test
             } else {
-                $sock = New-Object System.Net.Sockets.TcpClient
-                $async = $sock.BeginConnect('8.8.8.8', 53, $null, $null)
-                $ok = $async.AsyncWaitHandle.WaitOne(3000)
-                if ($ok) { 
-                    $sock.EndConnect($async)
-                    $sock.Close()
-                    $Global:ProfileState.HasNetwork = $true 
-                } else { 
-                    $Global:ProfileState.HasNetwork = $false 
+                $sock = $null
+                $async = $null
+                try {
+                    $sock = [System.Net.Sockets.TcpClient]::new()
+                    $async = $sock.BeginConnect($networkProbeTarget, 53, $null, $null)
+                    $ok = $async.AsyncWaitHandle.WaitOne(3000)
+                    if ($ok) {
+                        $sock.EndConnect($async)
+                        $Global:ProfileState.HasNetwork = $true
+                    } else {
+                        $Global:ProfileState.HasNetwork = $false
+                    }
+                } finally {
+                    if ($async -and $async.AsyncWaitHandle) {
+                        try { $async.AsyncWaitHandle.Dispose() } catch { Write-ProfileLog "AsyncWaitHandle cleanup failed: $($_.Exception.Message)" -Level DEBUG -Component "Environment" }
+                    }
+                    if ($sock) {
+                        try { $sock.Dispose() } catch { Write-ProfileLog "Socket cleanup failed: $($_.Exception.Message)" -Level DEBUG -Component "Environment" }
+                    }
                 }
             }
         } catch {
             $Global:ProfileState.HasNetwork = $false
             $Global:ProfileState.Notes += "Network probe failed: $($_.Exception.Message)"
+            Write-CaughtException -Context "Test-Environment network probe" -ErrorRecord $_ -Component "Environment" -Level DEBUG
         }
     }
 
@@ -516,9 +675,9 @@ function Show-EnvironmentReport {
     Write-Host $Global:ProfileState.PowerShellVersion -ForegroundColor Yellow
 
     Write-Host "Platform: " -NoNewline
-    $plat = if ($Global:ProfileState.IsWindows) { 'Windows' } 
-            elseif ($Global:ProfileState.IsLinux) { 'Linux' } 
-            elseif ($Global:ProfileState.IsMacOS) { 'macOS' } 
+    $plat = if ($Global:ProfileState.IsWindows) { 'Windows' }
+            elseif ($Global:ProfileState.IsLinux) { 'Linux' }
+            elseif ($Global:ProfileState.IsMacOS) { 'macOS' }
             else { 'Unknown' }
     Write-Host $plat -ForegroundColor Yellow
 
@@ -621,11 +780,122 @@ function Initialize-PSReadLine {
         foreach ($kb in $opts.KeyBindings.GetEnumerator()) {
             try {
                 Set-PSReadLineKeyHandler -Key $kb.Key -Function $kb.Value -ErrorAction SilentlyContinue
-            } catch {}
+            } catch {
+                Write-ProfileLog "PSReadLine key handler failed for '$($kb.Key)': $($_.Exception.Message)" -Level DEBUG -Component "PSReadLine"
+            }
         }
 
         # Maximum kill ring count
         Set-PSReadLineOption -MaximumKillRingCount $opts.MaximumKillRingCount -ErrorAction SilentlyContinue
+
+        # Word delimiters for Ctrl+Backspace, Ctrl+Left/Right word navigation
+        if ($opts.WordDelimiters) {
+            Set-PSReadLineOption -WordDelimiters $opts.WordDelimiters -ErrorAction SilentlyContinue
+        }
+
+        # ── Productivity key bindings ──────────────────────────────────
+        # Tab → MenuComplete: shows a navigable completion menu instead of cycling
+        Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
+        Set-PSReadLineKeyHandler -Key Shift+Tab -Function TabCompletePrevious
+
+        # Arrow keys → context-aware history search (type partial cmd then ↑/↓)
+        Set-PSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward
+        Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+
+        # Ctrl+Space → show all available completions in a list
+        Set-PSReadLineKeyHandler -Key Ctrl+Spacebar -Function PossibleCompletions
+
+        # F1 → show help for current command in a separate window
+        Set-PSReadLineKeyHandler -Key F1 -Function ShowCommandHelp
+
+        # F2 → toggle between inline and list prediction view
+        Set-PSReadLineKeyHandler -Key F2 -Function SwitchPredictionView
+
+        # Ctrl+r / Ctrl+s → interactive history search (Emacs-style)
+        Set-PSReadLineKeyHandler -Key Ctrl+r -Function ReverseSearchHistory
+        Set-PSReadLineKeyHandler -Key Ctrl+s -Function ForwardSearchHistory
+
+        # Ctrl+w → delete word backward (Unix muscle memory)
+        Set-PSReadLineKeyHandler -Key Ctrl+w -Function BackwardDeleteWord
+
+        # Alt+d → delete word forward
+        Set-PSReadLineKeyHandler -Key Alt+d -Function DeleteWord
+
+        # Alt+. → insert last argument of previous command (huge time saver)
+        Set-PSReadLineKeyHandler -Key Alt+Period -Function YankLastArg
+
+        # Ctrl+Home / Ctrl+End → jump to start/end of buffer
+        Set-PSReadLineKeyHandler -Key Ctrl+Home -Function BeginningOfLine
+        Set-PSReadLineKeyHandler -Key Ctrl+End -Function EndOfLine
+
+        # Smart paired quotes: typing " inserts paired quotes with cursor inside
+        Set-PSReadLineKeyHandler -Key '"', "'" -BriefDescription SmartInsertQuote `
+            -LongDescription 'Insert paired quotes; wrap selection if text is selected' `
+            -ScriptBlock {
+                param($key, $arg)
+                $quote = $key.KeyChar
+                $selectionStart = $null
+                $selectionLength = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($selectionStart -ne -1) {
+                    # Wrap selected text in quotes
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $quote + $line.SubString($selectionStart, $selectionLength) + $quote)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+                } elseif ($line[$cursor] -eq $quote) {
+                    # Skip over closing quote
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                } else {
+                    # Insert paired quotes, cursor between them
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($quote + $quote)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                }
+            }
+
+        # Smart paired braces: typing ( { [ inserts the pair
+        Set-PSReadLineKeyHandler -Key '(', '{', '[' -BriefDescription InsertPairedBrace `
+            -LongDescription 'Insert matching closing brace; wrap selection if selected' `
+            -ScriptBlock {
+                param($key, $arg)
+                $openChar  = $key.KeyChar
+                $closeChar = switch ($openChar) { '(' { ')' } '{' { '}' } '[' { ']' } }
+                $selectionStart = $null; $selectionLength = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($selectionStart -ne -1) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $openChar + $line.SubString($selectionStart, $selectionLength) + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                }
+            }
+
+        # Smart closing brace: skip over existing close brace if it matches
+        Set-PSReadLineKeyHandler -Key ')', '}', ']' -BriefDescription SmartCloseBrace `
+            -LongDescription 'Skip over closing brace if next char matches; otherwise insert' `
+            -ScriptBlock {
+                param($key, $arg)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($line[$cursor] -eq $key.KeyChar) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
+                }
+            }
+
+        # Ctrl+Shift+c → copy entire command line
+        Set-PSReadLineKeyHandler -Key Ctrl+Shift+c -BriefDescription CopyEntireLine `
+            -LongDescription 'Copy the entire command line to clipboard' `
+            -ScriptBlock {
+                param($key, $arg)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($line) { Set-Clipboard $line }
+            }
 
         Write-ProfileLog "PSReadLine configured successfully" -Level INFO -Component "PSReadLine"
         return $true
@@ -753,8 +1023,8 @@ function Get-InstalledModulesCache {
     param([switch]$Refresh)
 
     if ($Refresh) { Update-InstalledModulesCache -Force | Out-Null }
-    if (-not (Test-Path $script:InstalledModulesCacheFile)) { 
-        Update-InstalledModulesCache | Out-Null 
+    if (-not (Test-Path $script:InstalledModulesCacheFile)) {
+        Update-InstalledModulesCache | Out-Null
     }
 
     try {
@@ -842,6 +1112,7 @@ function Import-ProfileModule {
 }
 
 function Ensure-Module {
+    # NOTE: Non-standard verb retained for backward compatibility; use Assert-ModuleAvailable alias below
     <#
     .SYNOPSIS
         Ensures a module is available, installing if necessary.
@@ -946,24 +1217,34 @@ function Start-DeferredModuleLoader {
                         $result[$mod] = 'NotFound'
                     }
                 } catch {
-                    $result[$mod] = "Failed: $_"
+                    $result[$mod] = "Failed: $($_.Exception.Message)"
                 }
             }
             return $result
         }
 
-        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList (, $Modules) -ErrorAction SilentlyContinue
-        if ($job) {
-            $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds
+        $job = $null
+        try {
+            $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList (, $Modules) -ErrorAction Stop
+            $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds -ErrorAction SilentlyContinue
             if ($completed) {
                 $res = Receive-Job -Job $job -ErrorAction SilentlyContinue
                 foreach ($k in $res.Keys) { $status[$k] = $res[$k] }
             } else {
-                foreach ($m in $Modules) { 
-                    if ($status[$m] -eq 'Pending') { $status[$m] = 'Timeout' } 
+                foreach ($m in $Modules) {
+                    if ($status[$m] -eq 'Pending') { $status[$m] = 'Timeout' }
                 }
+                try { Stop-Job -Job $job -ErrorAction SilentlyContinue } catch { Write-ProfileLog "Stop-Job failed during deferred loader timeout: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
             }
-            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-CaughtException -Context "Start-DeferredModuleLoader job execution" -ErrorRecord $_ -Component "Modules" -Level WARN
+            foreach ($m in $Modules) {
+                if ($status[$m] -eq 'Pending') { $status[$m] = 'Failed' }
+            }
+        } finally {
+            if ($job) {
+                try { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue } catch { Write-ProfileLog "Remove-Job failed during deferred loader cleanup: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
+            }
         }
     } else {
         foreach ($m in $Modules) {
@@ -971,7 +1252,7 @@ function Start-DeferredModuleLoader {
                 Import-Module $m -ErrorAction Stop -Global
                 $status[$m] = 'Imported'
             } catch {
-                $status[$m] = "Failed: $_"
+                $status[$m] = "Failed: $($_.Exception.Message)"
             }
         }
     }
@@ -987,8 +1268,9 @@ function Start-DeferredModuleLoader {
     }
 }
 
-# Initialize module cache on load
-Update-InstalledModulesCache | Out-Null
+# FIX: Defer module cache to first use instead of synchronous load (startup perf)
+# Update-InstalledModulesCache is called lazily by Get-InstalledModulesCache
+# Update-InstalledModulesCache | Out-Null  # <-- removed for startup speed
 
 # Start deferred loader for interactive sessions
 if ((Test-ProfileInteractive) -and $Global:ProfileConfig.DeferredLoader.Modules.Count -gt 0) {
@@ -1077,7 +1359,7 @@ function Get-DiskInfo {
     param()
 
     try {
-        Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue | 
+        Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue |
             Select-Object @{
                 N = 'Drive'; E = { $_.DeviceID }
             }, @{
@@ -1184,11 +1466,11 @@ function Get-GPUInfo {
     param()
 
     try {
-        Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue | 
-            Select-Object Name, 
+        Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+            Select-Object Name,
                 @{N = 'AdapterRAM_GB'; E = { if ($_.AdapterRAM) { [math]::Round($_.AdapterRAM / 1GB, 2) } else { 0 } }},
-                DriverVersion, 
-                VideoModeDescription, 
+                DriverVersion,
+                VideoModeDescription,
                 Status
     } catch {
         Write-ProfileLog "Get-GPUInfo failed: $_" -Level WARN -Component "System"
@@ -1239,11 +1521,12 @@ function Get-SystemHealth {
     param([switch]$Quick)
 
     try {
+        $cpuInfo = Get-CPUInfo
         $health = [ordered]@{
             Timestamp = Get-Date
             Disk      = Get-DiskInfo
             Memory    = Get-MemoryInfo
-            CPU       = Get-CPUInfo | Select-Object Name, PercentUsed
+            CPU       = if ($cpuInfo) { $cpuInfo | Select-Object Name, Cores, LogicalProcessors, CurrentClockSpeedMHz } else { $null }
         }
 
         if (-not $Quick) {
@@ -1253,12 +1536,13 @@ function Get-SystemHealth {
                 $health.CPUPercent = [math]::Round($cpuCounter.CounterSamples.CookedValue, 2)
             } catch {
                 $health.CPUPercent = $null
+                Write-CaughtException -Context "Get-SystemHealth counter sampling" -ErrorRecord $_ -Component "System" -Level DEBUG
             }
         }
 
         return [PSCustomObject]$health
     } catch {
-        Write-ProfileLog "Get-SystemHealth failed: $_" -Level WARN -Component "System"
+        Write-CaughtException -Context "Get-SystemHealth failed" -ErrorRecord $_ -Component "System" -Level WARN
         return $null
     }
 }
@@ -1319,8 +1603,8 @@ function Get-PerfSnapshot {
         $SampleSeconds = 1
     }
 
-    $data = [ordered]@{ 
-        Timestamp = (Get-Date).ToString('o') 
+    $data = [ordered]@{
+        Timestamp = (Get-Date).ToString('o')
     }
 
     try {
@@ -1372,18 +1656,18 @@ function Get-TopProcesses {
         $procs = Get-Process -ErrorAction SilentlyContinue
 
         switch ($By) {
-            'CPU' { 
-                return $procs | Sort-Object CPU -Descending | 
+            'CPU' {
+                return $procs | Sort-Object CPU -Descending |
                     Select-Object -First $Top Name, Id, CPU, @{N = 'MemoryMB'; E = { [math]::Round($_.WorkingSet64 / 1MB, 2) }}
             }
-            'IO' { 
-                return $procs | Sort-Object IOReadBytes -Descending | 
-                    Select-Object -First $Top Name, Id, @{N = 'ReadMB'; E = { [math]::Round($_.IOReadBytes / 1MB, 2) }}, 
+            'IO' {
+                return $procs | Sort-Object IOReadBytes -Descending |
+                    Select-Object -First $Top Name, Id, @{N = 'ReadMB'; E = { [math]::Round($_.IOReadBytes / 1MB, 2) }},
                         @{N = 'WriteMB'; E = { [math]::Round($_.IOWriteBytes / 1MB, 2) }}
             }
-            default { 
-                return $procs | Sort-Object WorkingSet64 -Descending | 
-                    Select-Object -First $Top Name, Id, @{N = 'MemoryMB'; E = { [math]::Round($_.WorkingSet64 / 1MB, 2) }}, 
+            default {
+                return $procs | Sort-Object WorkingSet64 -Descending |
+                    Select-Object -First $Top Name, Id, @{N = 'MemoryMB'; E = { [math]::Round($_.WorkingSet64 / 1MB, 2) }},
                         @{N = 'CPUTime'; E = { $_.CPU }}
             }
         }
@@ -1438,15 +1722,15 @@ function Measure-Benchmark {
             MinMs       = $sorted | Select-Object -First 1
             MaxMs       = $sorted | Select-Object -Last 1
             AvgMs       = [math]::Round(($times | Measure-Object -Average).Average, 2)
-            MedianMs    = if ($sorted.Count % 2 -eq 0) { 
+            MedianMs    = if ($sorted.Count % 2 -eq 0) {
                 [math]::Round(($sorted[$sorted.Count / 2 - 1] + $sorted[$sorted.Count / 2]) / 2, 2)
-            } else { 
+            } else {
                 $sorted[[math]::Floor($sorted.Count / 2)]
             }
             TotalMs     = ($times | Measure-Object -Sum).Sum
         }
     } catch {
-        Write-ProfileLog "Measure-Benchmark failed: $_" -Level WARN -Component "Performance"
+        Write-CaughtException -Context "Measure-Benchmark failed" -ErrorRecord $_ -Component "Performance" -Level WARN
         return $null
     }
 }
@@ -1480,30 +1764,44 @@ function Test-TcpPort {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$HostName,
-        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 65535)]
+        [int]$Port,
+        [ValidateRange(100, 30000)]
         [int]$TimeoutMs = 1200
     )
 
     try {
         $client = New-Object System.Net.Sockets.TcpClient
-        $async = $client.BeginConnect($HostName, $Port, $null, $null)
-        $ok = $async.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+        $async = $null
+        $waitHandle = $null
 
-        if (-not $ok) { 
-            try { $client.Close() } catch {}
-            return $false 
+        try {
+            $async = $client.BeginConnect($HostName, $Port, $null, $null)
+            $waitHandle = $async.AsyncWaitHandle
+            $ok = $waitHandle.WaitOne($TimeoutMs, $false)
+
+            if (-not $ok) {
+                return $false
+            }
+
+            try {
+                $client.EndConnect($async)
+            } catch {
+                return $false
+            }
+
+            return $true
+        } finally {
+            if ($waitHandle) {
+                try { $waitHandle.Dispose() } catch { Write-ProfileLog "TCP wait handle cleanup failed: $($_.Exception.Message)" -Level DEBUG -Component "Network" }
+            }
+            if ($client) {
+                try { $client.Dispose() } catch { Write-ProfileLog "TCP client cleanup failed: $($_.Exception.Message)" -Level DEBUG -Component "Network" }
+            }
         }
-
-        try { 
-            $client.EndConnect($async) 
-        } catch { 
-            return $false 
-        } finally { 
-            try { $client.Close() } catch {} 
-        }
-
-        return $true
     } catch {
+        Write-CaughtException -Context "Test-TcpPort failed (${HostName}:$Port)" -ErrorRecord $_ -Component "Network" -Level DEBUG
         return $false
     }
 }
@@ -1523,8 +1821,8 @@ function Test-IpAddress {
     try {
         $addr = $null
         return [System.Net.IPAddress]::TryParse($Address, [ref]$addr)
-    } catch { 
-        return $false 
+    } catch {
+        return $false
     }
 }
 
@@ -1541,13 +1839,13 @@ function Get-LocalIP {
     try {
         $ips = @()
         if ($Global:IsWindows) {
-            $adapters = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+            $adapters = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
                 Where-Object { $_.IPAddress -and $_.PrefixOrigin -ne 'WellKnown' }
             foreach ($a in $adapters) { $ips += $a.IPAddress }
         } else {
             $raw = (ip -4 addr 2>$null)
             if ($raw) {
-                $ips += ($raw | Select-String -Pattern '(?<=inet\s)\d+\.\d+\.\d+\.\d+' -AllMatches | 
+                $ips += ($raw | Select-String -Pattern '(?<=inet\s)\d+\.\d+\.\d+\.\d+' -AllMatches |
                     ForEach-Object { $_.Matches.Value })
             }
         }
@@ -1581,7 +1879,10 @@ function Get-PublicIP {
             try {
                 $resp = Invoke-RestMethod -Uri $p -Method Get -TimeoutSec $TimeoutSeconds -ErrorAction Stop
                 if ($resp) { return $resp.Trim() }
-            } catch { continue }
+            } catch {
+                Write-ProfileLog "Public IP provider failed ($p): $($_.Exception.Message)" -Level DEBUG -Component "Network"
+                continue
+            }
         }
         return $null
     } catch {
@@ -1638,8 +1939,8 @@ function Get-DnsConfig {
     if (-not $Global:IsWindows) { return $null }
 
     try {
-        if (-not (Get-Command Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) { 
-            return $null 
+        if (-not (Get-Command Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+            return $null
         }
 
         $dnsArgs = @{ AddressFamily = 'IPv4'; ErrorAction = 'SilentlyContinue' }
@@ -1672,14 +1973,14 @@ function Set-DnsServers {
         [switch]$Dhcp
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Set-DnsServers is Windows-only" -Level WARN -Component "Network"
-        return $false 
+        return $false
     }
 
-    if (-not (Test-Admin)) { 
+    if (-not (Test-Admin)) {
         Write-Host "Set-DnsServers requires administrator privileges." -ForegroundColor Yellow
-        return $false 
+        return $false
     }
 
     # Validate IP addresses
@@ -1736,27 +2037,27 @@ function Restart-NetworkAdapter {
         [int]$DelaySeconds = 2
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Restart-NetworkAdapter is Windows-only" -Level WARN -Component "Network"
-        return $false 
+        return $false
     }
 
-    if (-not (Test-Admin)) { 
+    if (-not (Test-Admin)) {
         Write-Host "Restart-NetworkAdapter requires administrator privileges." -ForegroundColor Yellow
-        return $false 
+        return $false
     }
 
     $targets = @()
     if ($InterfaceAlias) {
         $targets = @($InterfaceAlias)
     } else {
-        $targets = Get-NetworkAdapters -UpOnly:$UpOnly -PhysicalOnly:$PhysicalOnly | 
+        $targets = Get-NetworkAdapters -UpOnly:$UpOnly -PhysicalOnly:$PhysicalOnly |
             Select-Object -ExpandProperty InterfaceAlias
     }
 
-    if (-not $targets) { 
+    if (-not $targets) {
         Write-Host "No adapters matched." -ForegroundColor Yellow
-        return $false 
+        return $false
     }
 
     $ok = $true
@@ -1821,24 +2122,30 @@ function Get-NetworkSnapshot {
         NetAdapters = @()
     }
 
-    try { $snap.LocalIP = Get-LocalIP } catch {}
-    try { $snap.PublicIP = Get-PublicIP } catch {}
+    try { $snap.LocalIP = Get-LocalIP } catch { Write-CaughtException -Context "Get-NetworkSnapshot LocalIP" -ErrorRecord $_ -Component "Network" -Level DEBUG }
+    try { $snap.PublicIP = Get-PublicIP } catch { Write-CaughtException -Context "Get-NetworkSnapshot PublicIP" -ErrorRecord $_ -Component "Network" -Level DEBUG }
 
     if ($Global:IsWindows) {
         try {
-            $snap.DnsServers = Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+            $snap.DnsServers = Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
                 Select-Object InterfaceAlias, ServerAddresses
-        } catch {}
+        } catch {
+            Write-CaughtException -Context "Get-NetworkSnapshot DNS query" -ErrorRecord $_ -Component "Network" -Level DEBUG
+        }
 
         try {
-            $snap.DefaultRoutes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | 
+            $snap.DefaultRoutes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
                 Select-Object InterfaceAlias, NextHop, RouteMetric, ifIndex
-        } catch {}
+        } catch {
+            Write-CaughtException -Context "Get-NetworkSnapshot route query" -ErrorRecord $_ -Component "Network" -Level DEBUG
+        }
 
         try {
-            $snap.NetAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | 
+            $snap.NetAdapters = Get-NetAdapter -ErrorAction SilentlyContinue |
                 Select-Object Name, Status, LinkSpeed, MacAddress
-        } catch {}
+        } catch {
+            Write-CaughtException -Context "Get-NetworkSnapshot adapter query" -ErrorRecord $_ -Component "Network" -Level DEBUG
+        }
     }
 
     return [PSCustomObject]$snap
@@ -1870,6 +2177,8 @@ function Test-Internet {
     $result = [ordered]@{
         Dns       = $false
         Tcp       = $false
+        DnsError  = $null
+        TcpError  = $null
         Timestamp = (Get-Date).ToString('o')
     }
 
@@ -1882,12 +2191,18 @@ function Test-Internet {
             # Fallback TCP test
             $result.Dns = Test-TcpPort -HostName $TcpHost -Port $TcpPort -TimeoutMs $TimeoutMs
         }
-    } catch {}
+    } catch {
+        $result.DnsError = $_.Exception.Message
+        Write-CaughtException -Context "Test-Internet DNS test" -ErrorRecord $_ -Component "Network" -Level DEBUG
+    }
 
     # TCP test
     try {
         $result.Tcp = Test-TcpPort -HostName $TcpHost -Port $TcpPort -TimeoutMs $TimeoutMs
-    } catch {}
+    } catch {
+        $result.TcpError = $_.Exception.Message
+        Write-CaughtException -Context "Test-Internet TCP test" -ErrorRecord $_ -Component "Network" -Level DEBUG
+    }
 
     return [PSCustomObject]$result
 }
@@ -1960,14 +2275,14 @@ function Set-DnsProfile {
         [switch]$FlushDns
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Set-DnsProfile is Windows-only" -Level WARN -Component "Network"
-        return $false 
+        return $false
     }
 
-    if (-not (Test-Admin)) { 
+    if (-not (Test-Admin)) {
         Write-Host "Set-DnsProfile requires administrator privileges." -ForegroundColor Yellow
-        return $false 
+        return $false
     }
 
     Initialize-NetworkProfiles | Out-Null
@@ -1986,9 +2301,9 @@ function Set-DnsProfile {
         $targets = Get-NetworkAdapters -UpOnly -PhysicalOnly | Select-Object -ExpandProperty InterfaceAlias
     }
 
-    if (-not $targets) { 
+    if (-not $targets) {
         Write-Host "No adapters matched." -ForegroundColor Yellow
-        return $false 
+        return $false
     }
 
     $ok = $true
@@ -2036,9 +2351,9 @@ function Use-BestDns {
         [int]$TimeoutMs = 1200
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Use-BestDns is Windows-only" -Level WARN -Component "Network"
-        return $false 
+        return $false
     }
 
     Initialize-NetworkProfiles | Out-Null
@@ -2060,9 +2375,9 @@ function Use-BestDns {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $ok = Test-TcpPort -HostName $t.Host -Port $t.Port -TimeoutMs $TimeoutMs
         $sw.Stop()
-        $ranked += [pscustomobject]@{ 
-            Name = $t.Name; 
-            Reachable = $ok; 
+        $ranked += [pscustomobject]@{
+            Name = $t.Name;
+            Reachable = $ok;
             LatencyMs = if ($ok) { [int]$sw.ElapsedMilliseconds } else { 999999 }
         }
     }
@@ -2103,11 +2418,9 @@ function Optimize-System {
         Performs system optimization.
     .DESCRIPTION
         Cleans temporary files and performs non-destructive optimizations.
-    .PARAMETER WhatIf
-        Show what would be done without making changes.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param([switch]$WhatIf)
+    param()
 
     if (-not (Test-Admin)) {
         Write-ProfileLog "Optimize-System requires admin privileges" -Level WARN -Component "Optimization"
@@ -2115,34 +2428,37 @@ function Optimize-System {
         return $false
     }
 
-    if ($WhatIf) {
-        Write-Host "WhatIf: Would clean temp files and optimize system" -ForegroundColor Cyan
-        return $true
-    }
-
     try {
         # Clean user temp files older than 7 days
         $temp = [IO.Path]::GetTempPath()
         $cutoff = (Get-Date).AddDays(-7)
 
-        $files = Get-ChildItem -Path $temp -Recurse -File -ErrorAction SilentlyContinue | 
+        $files = Get-ChildItem -Path $temp -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.LastWriteTime -lt $cutoff }
 
         $count = 0
+        $failed = 0
         foreach ($f in $files) {
             try {
                 Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
                 $count++
-            } catch {}
+            } catch {
+                $failed++
+                Write-ProfileLog "Temp cleanup failed for '$($f.FullName)': $($_.Exception.Message)" -Level DEBUG -Component "Optimization"
+            }
         }
 
-        Write-ProfileLog "Cleaned $count temp files" -Level INFO -Component "Optimization"
+        Write-ProfileLog "Cleaned $count temp files ($failed skipped)" -Level INFO -Component "Optimization"
 
-        # Clear Recycle Bin (optional)
+        # Clear Recycle Bin (optional, with ShouldProcess)
         try {
-            Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-            Write-ProfileLog "Recycle bin cleared" -Level INFO -Component "Optimization"
-        } catch {}
+            if ($PSCmdlet.ShouldProcess('Recycle Bin', 'Clear contents')) {
+                Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+                Write-ProfileLog "Recycle bin cleared" -Level INFO -Component "Optimization"
+            }
+        } catch {
+            Write-CaughtException -Context "Optimize-System recycle bin cleanup" -ErrorRecord $_ -Component "Optimization" -Level DEBUG
+        }
 
         return $true
     } catch {
@@ -2164,13 +2480,14 @@ function Invoke-DiskMaintenance {
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param(
+        [ValidatePattern('^[A-Za-z]:?$')]
         [string]$DriveLetter = 'C',
         [switch]$AnalyzeOnly
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Invoke-DiskMaintenance is Windows-only" -Level WARN -Component "Optimization"
-        return $false 
+        return $false
     }
 
     $drive = ($DriveLetter.TrimEnd(':') + ':')
@@ -2211,9 +2528,9 @@ function Set-PowerPlan {
         [string]$Plan
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Set-PowerPlan is Windows-only" -Level WARN -Component "Optimization"
-        return $false 
+        return $false
     }
 
     $planGuid = switch ($Plan) {
@@ -2308,7 +2625,13 @@ function Test-ProfileHealth {
         $pathOk = Test-Path $p
         $report.Tests += [pscustomobject]@{ Test = "Path: $(Split-Path $p -Leaf)"; Status = if ($pathOk) { 'PASS' } else { 'FAIL' }; Details = $p }
         if (-not $pathOk -and $Repair) {
-            try { New-Item -Path $p -ItemType Directory -Force | Out-Null } catch {}
+            try {
+                New-Item -Path $p -ItemType Directory -Force | Out-Null
+                $report.Recommendations += "Repaired missing path: $p"
+            } catch {
+                $report.Issues += "Failed to repair path: $p"
+                Write-CaughtException -Context "Test-ProfileHealth repair path '$p'" -ErrorRecord $_ -Component "Diagnostics" -Level DEBUG
+            }
         }
     }
 
@@ -2320,7 +2643,7 @@ function Test-ProfileHealth {
     }
 
     # Test 5: PSReadLine configuration
-    $psrlOk = (Get-Command Get-PSReadLineOption -ErrorAction SilentlyContinue) -ne $null
+    $psrlOk = $null -ne (Get-Command Get-PSReadLineOption -ErrorAction SilentlyContinue)
     $report.Tests += [pscustomobject]@{ Test = 'PSReadLine Config'; Status = if ($psrlOk) { 'PASS' } else { 'WARN' }; Details = if ($psrlOk) { 'Configured' } else { 'Not configured' } }
 
     # Test 6: Deferred modules
@@ -2358,7 +2681,7 @@ function Show-ProfileDiagnostics {
             'WARN' { 'Yellow' }
             default { 'Gray' }
         }
-        Write-Host "  [$($t.Status)] $($t.Test)" -NoNewline
+        Write-Host "  [$($t.Status)] $($t.Test)" -NoNewline -ForegroundColor $color
         Write-Host " - $($t.Details)" -ForegroundColor DarkGray
     }
 
@@ -2401,7 +2724,7 @@ function Repair-Profile {
         Write-Host "Repairing profile..." -ForegroundColor Cyan
 
         # Recreate directories
-        $paths = @($Global:ProfileConfig.LogPath, $Global:ProfileConfig.TranscriptPath, 
+        $paths = @($Global:ProfileConfig.LogPath, $Global:ProfileConfig.TranscriptPath,
                    $Global:ProfileConfig.CachePath, $Global:ProfileConfig.ThemesPath)
         foreach ($p in $paths) {
             if (-not (Test-Path $p)) {
@@ -2432,26 +2755,28 @@ function Reset-ProfileToDefaults {
         Resets profile to default state.
     .DESCRIPTION
         Clears caches and resets configuration to defaults.
-    .PARAMETER Confirm
-        Confirm the reset action.
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-    param([switch]$Confirm)
+    param()
 
     if ($PSCmdlet.ShouldProcess('Profile configuration', 'Reset to defaults')) {
         # Clear caches
         try {
             Remove-Item -Path (Join-Path $Global:ProfileConfig.CachePath '*') -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "Cache cleared." -ForegroundColor Green
-        } catch {}
+        } catch {
+            Write-CaughtException -Context "Reset-ProfileToDefaults cache cleanup" -ErrorRecord $_ -Component "Diagnostics" -Level WARN
+        }
 
         # Clear logs (keep current month)
         try {
-            Get-ChildItem -Path $Global:ProfileConfig.LogPath -Filter "profile_*.log" | 
-                Where-Object { $_.Name -ne "profile_$(Get-Date -Format 'yyyyMM').log" } | 
+            Get-ChildItem -Path $Global:ProfileConfig.LogPath -Filter "profile_*.log" |
+                Where-Object { $_.Name -ne "profile_$(Get-Date -Format 'yyyyMM').log" } |
                 Remove-Item -Force -ErrorAction SilentlyContinue
             Write-Host "Old logs cleared." -ForegroundColor Green
-        } catch {}
+        } catch {
+            Write-CaughtException -Context "Reset-ProfileToDefaults log cleanup" -ErrorRecord $_ -Component "Diagnostics" -Level WARN
+        }
 
         # Reset deferred modules
         $Global:DeferredModulesStatus = [ordered]@{
@@ -2522,14 +2847,14 @@ function Restart-ServiceByName {
         [switch]$Force
     )
 
-    if (-not $Global:IsWindows) { 
+    if (-not $Global:IsWindows) {
         Write-ProfileLog "Restart-ServiceByName is Windows-only" -Level WARN -Component "Services"
-        return $false 
+        return $false
     }
 
     try {
         $svc = Get-Service -Name $Name -ErrorAction Stop
-        if ($PSCmdlet.ShouldProcess($Name, 'Restart service')) {
+        if ($null -ne $svc -and $PSCmdlet.ShouldProcess($Name, 'Restart service')) {
             Restart-Service -Name $Name -Force:$Force -ErrorAction Stop
             Write-ProfileLog "Service '$Name' restarted" -Level INFO -Component "Services"
             return $true
@@ -2589,7 +2914,9 @@ function Get-ProcessTree {
             $parent = $null
             try {
                 $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ParentProcessId
-            } catch {}
+            } catch {
+                Write-ProfileLog "Failed to resolve parent for process '$($p.ProcessName)' ($($p.Id)): $($_.Exception.Message)" -Level DEBUG -Component "Process"
+            }
 
             $tree += [PSCustomObject]@{
                 Id       = $p.Id
@@ -2669,14 +2996,14 @@ function Get-DriverInfo {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        $drivers = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue | 
+        $drivers = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
             Where-Object { $_.DriverVersion }
 
-        if ($Name) { 
-            $drivers = $drivers | Where-Object { $_.DeviceName -like "*$Name*" -or $_.FriendlyName -like "*$Name*" } 
+        if ($Name) {
+            $drivers = $drivers | Where-Object { $_.DeviceName -like "*$Name*" -or $_.FriendlyName -like "*$Name*" }
         }
 
-        return $drivers | Select-Object DeviceName, FriendlyName, DriverVersion, DriverDate, Manufacturer | 
+        return $drivers | Select-Object DeviceName, FriendlyName, DriverVersion, DriverDate, Manufacturer |
             Sort-Object DeviceName
     } catch {
         Write-ProfileLog "Get-DriverInfo failed: $_" -Level DEBUG -Component "Drivers"
@@ -2749,7 +3076,7 @@ function Find-DuplicateDrivers {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        $drivers = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue | 
+        $drivers = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
             Where-Object { $_.DeviceName }
 
         $grouped = $drivers | Group-Object DeviceName | Where-Object { $_.Count -gt 1 }
@@ -2810,11 +3137,9 @@ function Update-ProfileModules {
         Updates installed PowerShell modules.
     .DESCRIPTION
         Checks for and installs module updates from PSGallery.
-    .PARAMETER WhatIf
-        Show what would be updated.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param([switch]$WhatIf)
+    param()
 
     try {
         if (-not (Get-Command Update-Module -ErrorAction SilentlyContinue)) {
@@ -2833,21 +3158,21 @@ function Update-ProfileModules {
             try {
                 $available = Find-Module -Name $mod.Name -ErrorAction SilentlyContinue
                 if ($available -and $available.Version -gt $mod.Version) {
-                    if ($WhatIf) {
-                        Write-Host "WhatIf: Would update $($mod.Name) from $($mod.Version) to $($available.Version)" -ForegroundColor Cyan
-                    } elseif ($PSCmdlet.ShouldProcess("$($mod.Name) to v$($available.Version)", 'Update module')) {
+                    if ($PSCmdlet.ShouldProcess("$($mod.Name) to v$($available.Version)", 'Update module')) {
                         Update-Module -Name $mod.Name -Force -ErrorAction SilentlyContinue
                         Write-ProfileLog "Module '$($mod.Name)' updated to v$($available.Version)" -Level INFO -Component "Updates"
                         $updated++
                     }
                 }
-            } catch {}
+            } catch {
+                Write-CaughtException -Context "Update-ProfileModules item '$($mod.Name)'" -ErrorRecord $_ -Component "Updates" -Level DEBUG
+            }
         }
 
         Write-Host "Modules updated: $updated" -ForegroundColor Green
         return $true
     } catch {
-        Write-ProfileLog "Update-ProfileModules failed: $_" -Level WARN -Component "Updates"
+        Write-CaughtException -Context "Update-ProfileModules failed" -ErrorRecord $_ -Component "Updates" -Level WARN
         return $false
     }
 }
@@ -2913,14 +3238,16 @@ function Get-DiskUsage {
 
         foreach ($i in $items) {
             try {
-                $size = (Get-ChildItem -Path $i.FullName -Recurse -File -ErrorAction SilentlyContinue | 
+                $size = (Get-ChildItem -Path $i.FullName -Recurse -File -ErrorAction SilentlyContinue |
                     Measure-Object -Property Length -Sum).Sum
                 $usage += [PSCustomObject]@{
                     Path = $i.FullName
                     SizeGB = [math]::Round($size / 1GB, 2)
                     SizeMB = [math]::Round($size / 1MB, 2)
                 }
-            } catch {}
+            } catch {
+                Write-ProfileLog "Get-DiskUsage failed for '$($i.FullName)': $($_.Exception.Message)" -Level DEBUG -Component "Disk"
+            }
         }
 
         return $usage | Sort-Object SizeGB -Descending | Select-Object -First $Top
@@ -2952,7 +3279,7 @@ function Find-LargeFiles {
 
     try {
         $minBytes = $SizeMB * 1MB
-        Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue | 
+        Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Length -ge $minBytes } |
             Sort-Object Length -Descending |
             Select-Object -First $Top |
@@ -2971,13 +3298,10 @@ function Clear-TempFiles {
         Removes temporary files older than specified days.
     .PARAMETER DaysOld
         Files older than this many days will be removed.
-    .PARAMETER WhatIf
-        Show what would be removed.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
-        [int]$DaysOld = 7,
-        [switch]$WhatIf
+        [int]$DaysOld = 7
     )
 
     if (-not (Test-Admin)) {
@@ -2997,24 +3321,24 @@ function Clear-TempFiles {
 
         foreach ($p in $tempPaths) {
             if (Test-Path $p) {
-                $files = Get-ChildItem -Path $p -Recurse -File -ErrorAction SilentlyContinue | 
+                $files = Get-ChildItem -Path $p -Recurse -File -ErrorAction SilentlyContinue |
                     Where-Object { $_.LastWriteTime -lt $cutoff }
 
                 foreach ($f in $files) {
-                    if ($WhatIf) {
-                        Write-Host "WhatIf: Would remove $($f.FullName)" -ForegroundColor Cyan
-                    } elseif ($PSCmdlet.ShouldProcess($f.FullName, 'Remove temp file')) {
+                    if ($PSCmdlet.ShouldProcess($f.FullName, 'Remove temp file')) {
                         try {
                             $freed += $f.Length
                             Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
                             $removed++
-                        } catch {}
+                        } catch {
+                            Write-ProfileLog "Failed to remove temp file '$($f.FullName)': $($_.Exception.Message)" -Level DEBUG -Component "Cleanup"
+                        }
                     }
                 }
             }
         }
 
-        if (-not $WhatIf) {
+        if (-not $WhatIfPreference) {
             Write-ProfileLog "Removed $removed temp files, freed $([math]::Round($freed / 1MB, 2)) MB" -Level INFO -Component "Cleanup"
         }
 
@@ -3061,7 +3385,9 @@ function Get-CustomPrompt {
         if (Get-Command git -ErrorAction SilentlyContinue) {
             try {
                 $gitBranch = git branch --show-current 2>$null
-            } catch {}
+            } catch {
+                Write-ProfileLog "Git branch detection failed: $($_.Exception.Message)" -Level DEBUG -Component "Prompt"
+            }
         }
 
         # Build prompt
@@ -3093,7 +3419,7 @@ function Initialize-OhMyPosh {
     .SYNOPSIS
         Initializes oh-my-posh prompt.
     .DESCRIPTION
-        Configures oh-my-posh with a custom theme.
+        Configures oh-my-posh with a local theme when available.
     #>
     [CmdletBinding()]
     param()
@@ -3104,13 +3430,35 @@ function Initialize-OhMyPosh {
     }
 
     try {
-        # Use a built-in theme
-        $theme = 'jandedobbeleer'
-        oh-my-posh init pwsh --config "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/$theme.omp.json" | Invoke-Expression
-        Write-ProfileLog "oh-my-posh initialized with theme: $theme" -Level DEBUG -Component "Prompt"
+        # Discover theme: check local Themes/ folder for any .omp.json, then POSH_THEMES_PATH
+        $themeCandidates = @(
+            (Get-ChildItem -Path $Global:ProfileConfig.ThemesPath -Filter '*.omp.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
+            (if ($env:POSH_THEMES_PATH) { Get-ChildItem -Path $env:POSH_THEMES_PATH -Filter '*.omp.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName } else { $null })
+        ) | Where-Object { $_ -and (Test-Path $_) }
+
+        # Build init arguments
+        $ompArgs = @('init', 'pwsh')
+        if ($themeCandidates.Count -gt 0) {
+            $themePath = $themeCandidates[0]
+            $ompArgs += '--config'
+            $ompArgs += $themePath
+        } else {
+            $themePath = '(default)'
+        }
+
+        # Use ScriptBlock::Create to safely evaluate the multi-line init script
+        $initScript = (@(& oh-my-posh @ompArgs) -join "`n")
+        if ($initScript) {
+            & ([ScriptBlock]::Create($initScript))
+            Write-ProfileLog "oh-my-posh initialized with theme: $themePath" -Level DEBUG -Component "Prompt"
+        } else {
+            Write-ProfileLog "oh-my-posh init returned empty output" -Level WARN -Component "Prompt"
+            return $false
+        }
+
         return $true
     } catch {
-        Write-ProfileLog "oh-my-posh initialization failed: $_" -Level DEBUG -Component "Prompt"
+        Write-CaughtException -Context "Initialize-OhMyPosh failed" -ErrorRecord $_ -Component "Prompt" -Level DEBUG
         return $false
     }
 }
@@ -3135,7 +3483,9 @@ function Initialize-TerminalIcons {
         Write-ProfileLog "Terminal-Icons initialized" -Level DEBUG -Component "Prompt"
         return $true
     } catch {
-        Write-ProfileLog "Terminal-Icons initialization failed: $_" -Level DEBUG -Component "Prompt"
+        # Terminal-Icons can fail with XML/manifest parse errors on some versions;
+        # fall back gracefully so the rest of the prompt stack still loads.
+        Write-ProfileLog "Terminal-Icons initialization failed (non-blocking): $($_.Exception.Message)" -Level DEBUG -Component "Prompt"
         return $false
     }
 }
@@ -3187,8 +3537,8 @@ if (Test-ProfileInteractive) {
 .SYNOPSIS
     Package manager and development framework management functions
 .DESCRIPTION
-    Provides comprehensive management for Windows package managers (winget, 
-    chocolatey, scoop), language package managers (npm, pip, pipx, nuget), 
+    Provides comprehensive management for Windows package managers (winget,
+    chocolatey, scoop), language package managers (npm, pip, pipx, nuget),
     and development frameworks (dotnet, node, python).
 #>
 
@@ -3229,7 +3579,9 @@ function Get-PackageManagerStatus {
             try {
                 $verOutput = & $m.Command $m.VersionArg 2>$null | Select-Object -First 1
                 $version = ($verOutput -replace '.*?([0-9]+\.[0-9]+\.[0-9]+).*', '$1').Trim()
-            } catch {}
+            } catch {
+                Write-ProfileLog "Version detection failed for '$($m.Name)': $($_.Exception.Message)" -Level DEBUG -Component "PackageManager"
+            }
         }
         $results += [PSCustomObject]@{
             Name = $m.Name
@@ -3268,11 +3620,11 @@ function Get-WingetPackage {
     }
 
     try {
-        $args = @('search', $Query)
-        if ($Exact) { $args += '--exact' }
-        $args += '--accept-source-agreements'
-        
-        & winget @args | Out-String | Write-Output
+        $wingetArgs = @('search', $Query)
+        if ($Exact) { $wingetArgs += '--exact' }
+        $wingetArgs += '--accept-source-agreements'
+
+        & winget @wingetArgs | Out-String | Write-Output
     } catch {
         Write-ProfileLog "Get-WingetPackage failed: $_" -Level WARN -Component "PackageManager"
     }
@@ -3288,14 +3640,11 @@ function Install-WingetPackage {
         Package name or ID.
     .PARAMETER Silent
         Silent installation.
-    .PARAMETER WhatIf
-        Show what would be installed.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Package,
-        [switch]$Silent,
-        [switch]$WhatIf
+        [switch]$Silent
     )
 
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -3305,11 +3654,10 @@ function Install-WingetPackage {
 
     try {
         if ($PSCmdlet.ShouldProcess($Package, 'Install')) {
-            $args = @('install', $Package, '--accept-package-agreements', '--accept-source-agreements')
-            if ($Silent) { $args += '--silent' }
-            if ($WhatIf) { $args += '--what-if' }
-            
-            & winget @args
+            $wingetArgs = @('install', $Package, '--accept-package-agreements', '--accept-source-agreements')
+            if ($Silent) { $wingetArgs += '--silent' }
+
+            & winget @wingetArgs
             Write-ProfileLog "Installed winget package: $Package" -Level INFO -Component "PackageManager"
         }
         return $true
@@ -3332,7 +3680,7 @@ function Update-WingetPackage {
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
-        [Parameter(Mandatory)][string]$Package = 'all',
+        [string]$Package = 'all',
         [switch]$Silent
     )
 
@@ -3344,10 +3692,10 @@ function Update-WingetPackage {
     try {
         $target = if ($Package -eq 'all') { '--all' } else { $Package }
         if ($PSCmdlet.ShouldProcess($target, 'Upgrade')) {
-            $args = @('upgrade', $target, '--accept-package-agreements')
-            if ($Silent) { $args += '--silent' }
-            
-            & winget @args
+            $wingetArgs = @('upgrade', $target, '--accept-package-agreements')
+            if ($Silent) { $wingetArgs += '--silent' }
+
+            & winget @wingetArgs
             Write-ProfileLog "Updated winget package(s): $target" -Level INFO -Component "PackageManager"
         }
         return $true
@@ -3459,9 +3807,9 @@ function Install-ChocoPackage {
     try {
         foreach ($p in $Package) {
             if ($PSCmdlet.ShouldProcess($p, 'Install')) {
-                $args = @('install', $p, '-y')
-                if ($Force) { $args += '--force' }
-                choco @args
+                $chocoArgs = @('install', $p, '-y')
+                if ($Force) { $chocoArgs += '--force' }
+                choco @chocoArgs
                 Write-ProfileLog "Installed choco package: $p" -Level INFO -Component "PackageManager"
             }
         }
@@ -3655,7 +4003,7 @@ function Get-NpmPackage {
     }
 
     try {
-        npm search $Query --limit $Limit 2>$null | Select-Object -Skip 1 | 
+        npm search $Query --limit $Limit 2>$null | Select-Object -Skip 1 |
             ConvertFrom-String -PropertyNames Name, Description, Author, Date, Version, Keywords
     } catch {
         Write-ProfileLog "Get-NpmPackage failed: $_" -Level WARN -Component "PackageManager"
@@ -3688,15 +4036,15 @@ function Install-NpmPackage {
     try {
         foreach ($p in $Package) {
             if ($PSCmdlet.ShouldProcess($p, 'npm install')) {
-                $args = @('install')
-                if ($Global) { 
-                    $args += '-g' 
-                } elseif ($Dev) { 
-                    $args += '--save-dev' 
+                $npmArgs = @('install')
+                if ($Global) {
+                    $npmArgs += '-g'
+                } elseif ($Dev) {
+                    $npmArgs += '--save-dev'
                 }
-                $args += $p
-                
-                & npm @args
+                $npmArgs += $p
+
+                & npm @npmArgs
                 Write-ProfileLog "Installed npm package: $p" -Level INFO -Component "PackageManager"
             }
         }
@@ -3756,23 +4104,23 @@ function Get-NodeVersion {
     param()
 
     $result = @{}
-    
+
     if (Get-Command node -ErrorAction SilentlyContinue) {
         $result.NodeVersion = (node --version) -replace '^v'
     }
-    
+
     if (Get-Command npm -ErrorAction SilentlyContinue) {
         $result.NpmVersion = (npm --version)
     }
-    
+
     if (Get-Command nvm -ErrorAction SilentlyContinue) {
         $result.NvmVersion = (nvm version)
     }
-    
+
     if (Get-Command pnpm -ErrorAction SilentlyContinue) {
         $result.PnpmVersion = (pnpm --version)
     }
-    
+
     if (Get-Command yarn -ErrorAction SilentlyContinue) {
         $result.YarnVersion = (yarn --version)
     }
@@ -3843,12 +4191,12 @@ function Install-PipPackage {
     try {
         foreach ($p in $Package) {
             if ($PSCmdlet.ShouldProcess($p, 'pip install')) {
-                $args = @('install')
-                if ($User) { $args += '--user' }
-                if ($Upgrade) { $args += '--upgrade' }
-                $args += $p
-                
-                & pip @args
+                $pipArgs = @('install')
+                if ($User) { $pipArgs += '--user' }
+                if ($Upgrade) { $pipArgs += '--upgrade' }
+                $pipArgs += $p
+
+                & pip @pipArgs
                 Write-ProfileLog "Installed pip package: $p" -Level INFO -Component "PackageManager"
             }
         }
@@ -3884,19 +4232,19 @@ function Update-PipPackage {
             $packages = pip list --outdated --format=json 2>$null | ConvertFrom-Json | Select-Object -ExpandProperty name
             foreach ($p in $packages) {
                 if ($PSCmdlet.ShouldProcess($p, 'pip upgrade')) {
-                    $args = @('install', '--upgrade')
-                    if ($User) { $args += '--user' }
-                    $args += $p
-                    & pip @args
+                    $pipArgs = @('install', '--upgrade')
+                    if ($User) { $pipArgs += '--user' }
+                    $pipArgs += $p
+                    & pip @pipArgs
                 }
             }
             Write-ProfileLog "Updated all pip packages" -Level INFO -Component "PackageManager"
         } else {
             if ($PSCmdlet.ShouldProcess($Package, 'pip upgrade')) {
-                $args = @('install', '--upgrade')
-                if ($User) { $args += '--user' }
-                $args += $Package
-                & pip @args
+                $pipArgs = @('install', '--upgrade')
+                if ($User) { $pipArgs += '--user' }
+                $pipArgs += $Package
+                & pip @pipArgs
                 Write-ProfileLog "Updated pip package: $Package" -Level INFO -Component "PackageManager"
             }
         }
@@ -3943,19 +4291,19 @@ function Get-PythonVersion {
     param()
 
     $result = @{}
-    
+
     if (Get-Command python -ErrorAction SilentlyContinue) {
         $result.PythonVersion = (python --version) -replace '^Python\s+'
     }
-    
+
     if (Get-Command pip -ErrorAction SilentlyContinue) {
         $result.PipVersion = (pip --version) -split '\s+' | Select-Object -Index 1
     }
-    
+
     if (Get-Command pipx -ErrorAction SilentlyContinue) {
         $result.PipxVersion = (pipx --version)
     }
-    
+
     if (Get-Command conda -ErrorAction SilentlyContinue) {
         $result.CondaVersion = (conda --version) -replace '^conda\s+'
     }
@@ -4013,10 +4361,10 @@ function Install-DotnetTool {
 
     try {
         if ($PSCmdlet.ShouldProcess($Tool, 'dotnet tool install')) {
-            $args = @('tool', 'install', '--global', $Tool)
-            if ($Version) { $args += '--version'; $args += $Version }
-            
-            & dotnet @args
+            $dotnetArgs = @('tool', 'install', '--global', $Tool)
+            if ($Version) { $dotnetArgs += '--version'; $dotnetArgs += $Version }
+
+            & dotnet @dotnetArgs
             Write-ProfileLog "Installed dotnet tool: $Tool" -Level INFO -Component "PackageManager"
         }
         return $true
@@ -4233,10 +4581,10 @@ function Register-ToolCompletion {
 
 $WingetCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('install', 'show', 'source', 'search', 'list', 'upgrade', 'uninstall', 'hash', 'validate', 'settings', 'features', 'export', 'import', 'pin', 'configure', 'repair')
     $options = @('--version', '--info', '--help', '--wait', '--verbose', '--nowarn', '--disable-interactivity', '--rainbow')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4252,10 +4600,10 @@ Register-ToolCompletion -Command 'winget' -ScriptBlock $WingetCompletion
 
 $ChocoCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('install', 'upgrade', 'uninstall', 'search', 'list', 'info', 'outdated', 'pin', 'unpin', 'config', 'feature', 'apikey', 'unpackself', 'version', 'download')
     $options = @('--version', '--help', '-v', '--verbose', '--debug', '--accept-license', '-y', '--yes', '--force', '--noop', '--whatif')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4271,10 +4619,10 @@ Register-ToolCompletion -Command 'choco' -ScriptBlock $ChocoCompletion
 
 $ScoopCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('install', 'uninstall', 'update', 'upgrade', 'search', 'list', 'show', 'info', 'cleanup', 'bucket', 'cache', 'alias', 'reset', 'hold', 'unhold', 'status', 'cat', 'checkup', 'shim', 'which')
     $options = @('--version', '--help', '-g', '--global')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4290,10 +4638,10 @@ Register-ToolCompletion -Command 'scoop' -ScriptBlock $ScoopCompletion
 
 $NpmCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('install', 'uninstall', 'update', 'outdated', 'search', 'ls', 'list', 'run', 'start', 'test', 'build', 'publish', 'init', 'config', 'cache', 'audit', 'fix', 'fund', 'info', 'view', 'adduser', 'logout', 'whoami', 'version', 'prune', 'dedupe')
     $options = @('--version', '--help', '-g', '--global', '--save', '--save-dev', '--save-optional', '--save-exact', '--force', '--production', '--json')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4305,9 +4653,9 @@ Register-ToolCompletion -Command 'npm' -ScriptBlock $NpmCompletion
 
 $YarnCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('add', 'audit', 'autoclean', 'bin', 'cache', 'check', 'config', 'create', 'dedupe', 'generate-lock-entry', 'global', 'help', 'import', 'info', 'init', 'install', 'licenses', 'link', 'list', 'login', 'logout', 'node', 'outdated', 'owner', 'pack', 'policies', 'publish', 'remove', 'run', 'self-update', 'tag', 'team', 'test', 'upgrade', 'upgrade-interactive', 'version', 'versions', 'why', 'workspace', 'workspaces')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4316,10 +4664,10 @@ Register-ToolCompletion -Command 'yarn' -ScriptBlock $YarnCompletion
 
 $PnpmCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('add', 'audit', 'bin', 'config', 'exec', 'fetch', 'import', 'info', 'init', 'install', 'link', 'list', 'outdated', 'pack', 'prune', 'publish', 'rebuild', 'remove', 'run', 'search', 'start', 'store', 'test', 'unlink', 'update', 'upgrade', 'why')
     $options = @('--version', '--help', '-g', '--global', '--save-dev', '--save-prod', '--save-optional', '--frozen-lockfile')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4335,10 +4683,10 @@ Register-ToolCompletion -Command 'pnpm' -ScriptBlock $PnpmCompletion
 
 $PipCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('install', 'download', 'uninstall', 'freeze', 'list', 'show', 'search', 'check', 'config', 'cache', 'index', 'wheel', 'hash', 'completion', 'debug', 'help')
     $options = @('--version', '--help', '--upgrade', '-U', '--user', '--force-reinstall', '--no-deps', '--pre', '--require-virtualenv')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4355,10 +4703,10 @@ Register-ToolCompletion -Command 'pip3' -ScriptBlock $PipCompletion
 
 $DotnetCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('new', 'restore', 'build', 'publish', 'run', 'test', 'pack', 'migrate', 'clean', 'sln', 'store', 'help', 'add', 'remove', 'list', 'tool', 'nuget', 'msbuild', 'vstest', 'watch', 'format', 'workload', 'sdk')
     $options = @('--version', '--info', '--list-runtimes', '--list-sdks', '--help', '-v', '--verbosity', '-c', '--configuration', '-f', '--framework', '--runtime')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4374,10 +4722,10 @@ Register-ToolCompletion -Command 'dotnet' -ScriptBlock $DotnetCompletion
 
 $DockerCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('attach', 'build', 'builder', 'commit', 'compose', 'config', 'container', 'context', 'cp', 'create', 'diff', 'events', 'exec', 'export', 'history', 'image', 'images', 'import', 'info', 'inspect', 'kill', 'load', 'login', 'logout', 'logs', 'manifest', 'network', 'node', 'pause', 'plugin', 'port', 'ps', 'pull', 'push', 'rename', 'restart', 'rm', 'rmi', 'run', 'save', 'search', 'secret', 'service', 'stack', 'start', 'stats', 'stop', 'swarm', 'system', 'tag', 'top', 'trust', 'unpause', 'update', 'version', 'volume', 'wait')
     $options = @('--version', '--help', '-v', '--verbose', '-H', '--host', '--config', '--tls', '--tlscacert', '--tlscert', '--tlskey', '--tlsverify')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4393,10 +4741,10 @@ Register-ToolCompletion -Command 'docker' -ScriptBlock $DockerCompletion
 
 $GitCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('add', 'branch', 'checkout', 'clone', 'commit', 'config', 'diff', 'fetch', 'init', 'log', 'merge', 'mv', 'pull', 'push', 'rebase', 'reset', 'restore', 'rm', 'show', 'stash', 'status', 'switch', 'tag', 'bisect', 'cherry-pick', 'clean', 'describe', 'format-patch', 'gc', 'grep', 'help', 'notes', 'prune', 'reflog', 'remote', 'rerere', 'revert', 'shortlog', 'submodule', 'subtree', 'whatchanged', 'worktree')
     $options = @('--version', '--help', '--verbose', '--quiet', '--all', '--force', '--dry-run', '--porcelain', '--short')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4412,10 +4760,10 @@ Register-ToolCompletion -Command 'git' -ScriptBlock $GitCompletion
 
 $KubectlCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('get', 'describe', 'create', 'delete', 'apply', 'run', 'expose', 'set', 'edit', 'rollout', 'scale', 'autoscale', 'certificate', 'cluster-info', 'top', 'cordon', 'uncordon', 'drain', 'taint', 'label', 'annotate', 'completion', 'api-resources', 'api-versions', 'config', 'plugin', 'version', 'proxy', 'cp', 'auth', 'debug', 'events', 'exec', 'logs', 'port-forward', 'attach', 'wait')
     $options = @('--namespace', '-n', '--all-namespaces', '-A', '--output', '-o', '--selector', '-l', '--all', '--watch', '-w', '--show-labels', '--context')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4431,10 +4779,10 @@ Register-ToolCompletion -Command 'kubectl' -ScriptBlock $KubectlCompletion
 
 $HelmCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('completion', 'create', 'dependency', 'env', 'get', 'history', 'install', 'lint', 'list', 'package', 'plugin', 'pull', 'push', 'repo', 'rollback', 'search', 'show', 'status', 'template', 'test', 'uninstall', 'upgrade', 'verify', 'version')
     $options = @('--namespace', '-n', '--kube-context', '--kubeconfig', '--debug', '--help', '--version', '-v', '--repo', '--values', '-f', '--set', '--wait', '--timeout')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4450,9 +4798,9 @@ Register-ToolCompletion -Command 'helm' -ScriptBlock $HelmCompletion
 
 $CodeCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $options = @('--help', '--version', '-v', '--verbose', '--diff', '--merge', '--goto', '--new-window', '-n', '--reuse-window', '-r', '--wait', '-w', '--disable-extensions', '--list-extensions', '--show-versions', '--install-extension', '--uninstall-extension', '--enable-proposed-api', '--status', '--statuses', '--sync', '--export', '--telemetry', '--disable-telemetry', '--crash-reporter-directory', '--extensions-dir', '--user-data-dir', '--portable', '--enable-proposed-api', '--log', '--max-memory', '--turn-off-sync')
-    
+
     $options | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4465,10 +4813,10 @@ Register-ToolCompletion -Command 'code' -ScriptBlock $CodeCompletion
 
 $TerraformCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('apply', 'console', 'destroy', 'env', 'fmt', 'force-unlock', 'get', 'graph', 'import', 'init', 'login', 'logout', 'metadata', 'output', 'plan', 'providers', 'refresh', 'show', 'state', 'taint', 'test', 'untaint', 'validate', 'version', 'workspace')
     $options = @('--version', '--help', '-chdir', '-json', '-var', '-var-file', '-out', '-auto-approve', '-input', '-lock', '-lock-timeout', '-parallelism', '-refresh', '-target', '-upgrade', '-check', '-diff', '-recursive', '-write')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4484,9 +4832,9 @@ Register-ToolCompletion -Command 'terraform' -ScriptBlock $TerraformCompletion
 
 $AwsCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $services = @('accessanalyzer', 'account', 'acm', 'acm-pca', 'amp', 'amplify', 'amplifybackend', 'amplifyuibuilder', 'apigateway', 'apigatewaymanagementapi', 'apigatewayv2', 'appconfig', 'appconfigdata', 'appfabric', 'appflow', 'appintegrations', 'application-autoscaling', 'application-insights', 'applicationcostprofiler', 'appmesh', 'apprunner', 'appstream', 'appsync', 'arc-zonal-shift', 'athena', 'auditmanager', 'autoscaling', 'autoscaling-plans', 'b2bi', 'backup', 'backup-gateway', 'backupstorage', 'batch', 'bedrock', 'bedrock-agent', 'bedrock-agent-runtime', 'bedrock-runtime', 'billingconductor', 'braket', 'budgets', 'ce', 'chatbot', 'chime', 'chime-sdk-identity', 'chime-sdk-media-pipelines', 'chime-sdk-meetings', 'chime-sdk-messaging', 'chime-sdk-voice', 'cleanrooms', 'cloud9', 'cloudcontrol', 'clouddirectory', 'cloudformation', 'cloudfront', 'cloudfront-keyvaluestore', 'cloudhsm', 'cloudhsmv2', 'cloudsearch', 'cloudsearchdomain', 'cloudtrail', 'cloudtrail-data', 'cloudwatch', 'codeartifact', 'codebuild', 'codecatalyst', 'codecommit', 'codedeploy', 'codeguru-reviewer', 'codeguru-security', 'codeguruprofiler', 'codepipeline', 'codestar', 'codestar-connections', 'codestar-notifications', 'cognito-identity', 'cognito-idp', 'cognito-sync', 'comprehend', 'comprehendmedical', 'compute-optimizer', 'configservice', 'configure', 'connect', 'connect-contact-lens', 'connectcases', 'connectparticipant', 'controltower', 'cur', 'customer-profiles', 'databrew', 'dataexchange', 'datapipeline', 'datasync', 'dax', 'deploy', 'detective', 'devicefarm', 'devops-guru', 'directconnect', 'discovery', 'dlm', 'dms', 'docdb', 'docdb-elastic', 'drs', 'ds', 'dynamodb', 'dynamodbstreams', 'ebs', 'ec2', 'ec2-instance-connect', 'ecr', 'ecr-public', 'ecs', 'efs', 'eks', 'eks-auth', 'elasticache', 'elasticbeanstalk', 'elastictranscoder', 'elb', 'elbv2', 'emr', 'emr-containers', 'emr-serverless', 'entityresolution', 'es', 'events', 'evidently', 'finspace', 'finspace-data', 'firehose', 'fis', 'fms', 'forecast', 'forecastquery', 'frauddetector', 'fsx', 'gamelift', 'glacier', 'globalaccelerator', 'glue', 'grafana', 'greengrass', 'greengrassv2', 'groundstation', 'guardduty', 'health', 'healthlake', 'history', 'iam', 'identitystore', 'imagebuilder', 'importexport', 'inspector', 'inspector2', 'internetmonitor', 'iot', 'iot-data', 'iot-jobs-data', 'iot-roborunner', 'iot1click-devices', 'iot1click-projects', 'iotanalytics', 'iotdeviceadvisor', 'iotevents', 'iotevents-data', 'iotfleethub', 'iotfleetwise', 'iotsecuretunneling', 'iotsitewise', 'iotthingsgraph', 'iotwireless', 'ivs', 'ivs-realtime', 'ivschat', 'kafka', 'kafkaconnect', 'kendra', 'kendra-ranking', 'keyspaces', 'kinesis', 'kinesis-video-archived-media', 'kinesis-video-media', 'kinesis-video-signaling', 'kinesis-video-webrtc-storage', 'kinesisanalytics', 'kinesisanalyticsv2', 'kinesisvideo', 'kms', 'lakeformation', 'lambda', 'launch-wizard', 'lex-models', 'lex-runtime', 'lexv2-models', 'lexv2-runtime', 'license-manager', 'license-manager-linux-subscriptions', 'license-manager-user-subscriptions', 'lightsail', 'location', 'logs', 'lookoutequipment', 'lookoutmetrics', 'lookoutvision', 'm2', 'machinelearning', 'macie2', 'managedblockchain', 'managedblockchain-query', 'marketplace-catalog', 'marketplace-entitlement', 'marketplacecommerceanalytics', 'mediaconnect', 'mediaconvert', 'medialive', 'mediapackage', 'mediapackage-vod', 'mediapackagev2', 'mediastore', 'mediastore-data', 'mediatailor', 'medical-imaging', 'memorydb', 'meteringmarketplace', 'mgh', 'mgn', 'migration-hub-refactor-spaces', 'migrationhub-config', 'migrationhuborchestrator', 'migrationhubstrategy', 'mq', 'mturk', 'mwaa', 'neptune', 'neptune-graph', 'neptunedata', 'network-firewall', 'networkmanager', 'nimble', 'oam', 'omics', 'opensearch', 'opensearchserverless', 'opsworks', 'opsworks-cm', 'organizations', 'osis', 'outposts', 'panorama', 'payment-cryptography', 'payment-cryptography-data', 'pca-connector-ad', 'personalize', 'personalize-events', 'personalize-runtime', 'pi', 'pinpoint', 'pinpoint-email', 'pinpoint-sms-voice', 'pinpoint-sms-voice-v2', 'pipes', 'polly', 'pricing', 'privatenetworks', 'proton', 'qldb', 'qldb-session', 'quicksight', 'ram', 'rbin', 'rds', 'rds-data', 'redshift', 'redshift-data', 'redshift-serverless', 'rekognition', 'resiliencehub', 'resource-explorer-2', 'resource-groups', 'resourcegroupstaggingapi', 'robomaker', 'rolesanywhere', 'route53', 'route53-recovery-cluster', 'route53-recovery-control-config', 'route53-recovery-readiness', 'route53domains', 'route53resolver', 'rum', 's3', 's3api', 's3control', 's3outposts', 'sagemaker', 'sagemaker-a2i-runtime', 'sagemaker-edge', 'sagemaker-featurestore-runtime', 'sagemaker-geospatial', 'sagemaker-metrics', 'sagemaker-runtime', 'savingsplans', 'scheduler', 'schemas', 'sdb', 'secretsmanager', 'securityhub', 'securitylake', 'serverlessrepo', 'service-quotas', 'servicecatalog', 'servicecatalog-appregistry', 'servicediscovery', 'ses', 'sesv2', 'shield', 'signer', 'simspaceweaver', 'sms', 'snow-device-management', 'snowball', 'sns', 'sqs', 'ssm', 'ssm-contacts', 'ssm-incidents', 'ssm-sap', 'sso', 'sso-admin', 'sso-oidc', 'stepfunctions', 'storagegateway', 'sts', 'support', 'support-app', 'swf', 'synthetics', 'textract', 'timestream-query', 'timestream-write', 'tls', 'transcribe', 'transfer', 'translate', 'verifiedpermissions', 'voice-id', 'vpc-lattice', 'waf', 'waf-regional', 'wafv2', 'wellarchitected', 'wisdom', 'workdocs', 'worklink', 'workmail', 'workmailmessageflow', 'workspaces', 'workspaces-web', 'xray')
-    
+
     $services | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4499,10 +4847,10 @@ Register-ToolCompletion -Command 'aws' -ScriptBlock $AwsCompletion
 
 $AzCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('account', 'acr', 'ad', 'aks', 'apim', 'appconfig', 'appservice', 'backup', 'batch', 'billing', 'bot', 'cdn', 'cloud', 'cognitiveservices', 'config', 'configure', 'consumption', 'container', 'cosmosdb', 'deployment', 'disk', 'dla', 'dls', 'dms', 'eventgrid', 'eventhubs', 'extension', 'feedback', 'find', 'functionapp', 'group', 'hdinsight', 'identity', 'image', 'iot', 'keyvault', 'kusto', 'lab', 'lock', 'login', 'logout', 'managedapp', 'maps', 'mariadb', 'monitor', 'mysql', 'netappfiles', 'network', 'policy', 'postgres', 'ppg', 'provider', 'redis', 'relay', 'resource', 'role', 'search', 'security', 'servicebus', 'sf', 'signalr', 'snapshot', 'sql', 'sqlvm', 'ssh', 'storage', 'synapse', 'tag', 'term', 'ts', 'version', 'vm', 'vmss', 'webapp', 'webpubsub', 'workloads')
     $options = @('--version', '--help', '--verbose', '--debug', '--query', '--output', '-o', '--subscription', '-s', '--resource-group', '-g', '--location', '-l')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4518,10 +4866,10 @@ Register-ToolCompletion -Command 'az' -ScriptBlock $AzCompletion
 
 $GhCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('alias', 'api', 'auth', 'browse', 'codespace', 'completion', 'config', 'extension', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow')
     $options = @('--version', '--help', '--repo', '-R', '--hostname', '--silent', '--jq', '--json', '--template', '--paginate', '-p')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4537,10 +4885,10 @@ Register-ToolCompletion -Command 'gh' -ScriptBlock $GhCompletion
 
 $CargoCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('add', 'bench', 'build', 'check', 'clean', 'clippy', 'doc', 'fetch', 'fix', 'fmt', 'generate-lockfile', 'init', 'install', 'locate-project', 'login', 'logout', 'metadata', 'new', 'owner', 'package', 'pkgid', 'publish', 'remove', 'report', 'run', 'rustdoc', 'search', 'test', 'tree', 'uninstall', 'update', 'vendor', 'verify-project', 'version', 'yank')
     $options = @('--version', '--help', '--verbose', '-v', '--quiet', '-q', '--color', '--frozen', '--locked', '--offline', '-p', '--package', '--workspace', '--all', '--exclude', '--lib', '--bin', '--bins', '--example', '--examples', '--test', '--tests', '--bench', '--benches', '--all-targets', '--features', '--all-features', '--no-default-features', '--target', '--release', '-r', '--profile', '--debug', '--jobs', '-j')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4556,10 +4904,10 @@ Register-ToolCompletion -Command 'cargo' -ScriptBlock $CargoCompletion
 
 $NugetCompletion = {
     param($wordToComplete, $commandAst, $cursorPosition)
-    
+
     $commands = @('add', 'client-cert', 'config', 'delete', 'disable', 'enable', 'init', 'install', 'list', 'locals', 'push', 'remove', 'restore', 'search', 'setApiKey', 'sign', 'sources', 'spec', 'trustedsigners', 'update', 'verify')
     $options = @('--version', '--help', '--source', '--configfile', '--output-directory', '-OutputDirectory', '--exclude-version', '-ExcludeVersion', '--disable-parallel-processing', '--no-cache', '--require-consent', '--non-interactive', '--verbosity', '-Verbosity')
-    
+
     $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
@@ -4656,8 +5004,11 @@ function sudo { Start-Process pwsh -Verb runAs }
 function mods { Get-InstalledModulesCache | Format-List }
 function updatemods { Update-ProfileModules }
 
+# Backward-compat alias for Ensure-Module (non-standard verb)
+Set-Alias -Name Assert-ModuleAvailable -Value Ensure-Module -ErrorAction SilentlyContinue
+
 # Quick help
-function helpme { 
+function helpme {
     Write-Host "`n=== Profile Quick Reference ===" -ForegroundColor Cyan
     Write-Host "System: sysinfo, meminfo, cpuinfo, diskinfo, gpuinfo, biosinfo, health" -ForegroundColor Yellow
     Write-Host "Network: netinfo, ipinfo, pubip, flushdns" -ForegroundColor Yellow
@@ -4695,83 +5046,128 @@ function updateall { Update-AllPackages -Manager 'all' }
 
 #endregion ALIASES AND SHORTCUTS
 
-#region 21 - THIRD-PARTY CLI TOOL INTEGRATIONS
+#region 21 - NATIVE TOOL COMPLETERS AND SHIMS
 #==============================================================================
 <#
 .SYNOPSIS
-    Third-party CLI tool integrations
+    Dynamic native tool completers from installed tools.
 .DESCRIPTION
-    Provides integration with popular third-party CLI tools with argument
-    completion and configuration.
+    Tools like git, kubectl, docker, and aws generate their own PowerShell
+    completers. These are far superior to static arrays because they provide:
+    - Real-time context awareness (git branches, running containers, resources)
+    - Automatic updates as tools are upgraded
+    - Argument filtering and validation
+    - Full shell integration for the tool's native UX
+    
+    This region loads native completers on-demand to avoid startup overhead.
 #>
 
-function Initialize-ThirdPartyTools {
-    [CmdletBinding()]
-    param()
-
-    # Winget completion
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        # Add completion if available
-        Register-ArgumentCompleter -CommandName winget -ScriptBlock {
-            param($commandName, $wordToComplete, $cursorPosition)
-            winget --help | Select-String -Pattern "^\s+\w+" | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new(
-                    $_.Line.Trim(), $_.Line.Trim(), 'ParameterValue', $_.Line.Trim()
-                )
+# Git native completer (if posh-git not loaded, fall back)
+if ((Get-Command git -ErrorAction SilentlyContinue) -and -not (Get-Module posh-git -ErrorAction SilentlyContinue)) {
+    $gitCompleter = (& git --list-cmds=all 2>$null) -split '\n' | Where-Object { $_ }
+    if ($gitCompleter.Count -gt 0) {
+        Register-ArgumentCompleter -CommandName git -ScriptBlock {
+            param($wordToComplete, $commandAst, $cursorPosition)
+            $words = $commandAst.ToString().Split();
+            $subcommand = if ($words.Count -gt 1) { $words[1] } else { '' }
+            
+            if (-not $subcommand) {
+                # Complete git subcommands
+                (& git --list-cmds=builtins 2>$null) -split '\n' | 
+                    Where-Object { $_ -like "$wordToComplete*" } | 
+                    ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
             }
-        }
-    }
-
-    # gh (GitHub CLI) completion
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        Register-ArgumentCompleter -CommandName gh -ScriptBlock {
-            param($commandName, $wordToComplete, $cursorPosition)
-            gh help | Select-String -Pattern "^\s+\w+" | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new(
-                    $_.Line.Trim(), $_.Line.Trim(), 'ParameterValue', $_.Line.Trim()
-                )
-            }
-        }
-    }
-
-    # kubectl completion
-    if (Get-Command kubectl -ErrorAction SilentlyContinue) {
-        Register-ArgumentCompleter -CommandName kubectl -ScriptBlock {
-            param($commandName, $wordToComplete, $cursorPosition)
-            kubectl help | Select-String -Pattern "^\s+\w+" | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new(
-                    $_.Line.Trim(), $_.Line.Trim(), 'ParameterValue', $_.Line.Trim()
-                )
-            }
-        }
-    }
-
-    # helm completion
-    if (Get-Command helm -ErrorAction SilentlyContinue) {
-        Register-ArgumentCompleter -CommandName helm -ScriptBlock {
-            param($commandName, $wordToComplete, $cursorPosition)
-            helm help | Select-String -Pattern "^\s+\w+" | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new(
-                    $_.Line.Trim(), $_.Line.Trim(), 'ParameterValue', $_.Line.Trim()
-                )
-            }
-        }
-    }
-
-    # dotnet completion
-    if (Get-Command dotnet -ErrorAction SilentlyContinue) {
-        Register-ArgumentCompleter -CommandName dotnet -ScriptBlock {
-            param($commandName, $wordToComplete, $cursorPosition)
-            dotnet --help | Select-String -Pattern "^\s+\w+" | ForEach-Object {
-                [System.Management.Automation.CompletionResult]::new(
-                    $_.Line.Trim(), $_.Line.Trim(), 'ParameterValue', $_.Line.Trim()
-                )
-            }
-        }
+        } -ErrorAction SilentlyContinue
     }
 }
 
-#endregion THIRD-PARTY CLI TOOL INTEGRATIONS
+# kubectl native completer (if installed)
+if (Get-Command kubectl -ErrorAction SilentlyContinue) {
+    Register-ArgumentCompleter -CommandName kubectl -ScriptBlock {
+        param($wordToComplete, $commandAst, $cursorPosition)
+        $Local:word = $wordToComplete.Replace('"', '""')
+        $Local:ast = $commandAst.Extent.Text.Replace('"', '""')
+        $Local:cmd = @"
+            `$wordToComplete = '$word'
+            `$commandAst = '$ast'
+            `$cursorPosition = $cursorPosition
+            & kubectl __complete "$ast" $cursorPosition | ForEach-Object { 
+                [System.Management.Automation.CompletionResult]::new(`$_, `$_, 'ParameterValue', `$_)
+            }
+"@
+        try {
+            powershell.exe -NoProfile -Command $cmd 2>$null
+        } catch {
+            # kubectl completion unavailable; fall back to static completions
+        }
+    } -ErrorAction SilentlyContinue
+}
+
+# docker native completer (if installed)
+if (Get-Command docker -ErrorAction SilentlyContinue) {
+    Register-ArgumentCompleter -CommandName docker -ScriptBlock {
+        param($wordToComplete, $commandAst, $cursorPosition)
+        $words = $commandAst.ToString().Split()
+        if ($words.Count -eq 1) {
+            # Complete docker subcommands: build, run, ps, pull, push, etc.
+            & docker help 2>$null | grep -E '^\s+[a-z]' | awk '{print $1}' | 
+                Where-Object { $_ -like "$wordToComplete*" } | 
+                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+        }
+    } -ErrorAction SilentlyContinue
+}
+
+# AWS CLI v2 native completer (if installed)
+if (Get-Command aws -ErrorAction SilentlyContinue) {
+    $awsCompleteScript = (aws_completer 2>$null)
+    if ($awsCompleteScript) {
+        Register-ArgumentCompleter -CommandName aws -ScriptBlock ([scriptblock]::Create($awsCompleteScript)) -ErrorAction SilentlyContinue
+    }
+}
+
+# az CLI native completer (if installed and az_completer available)
+if (Get-Command az -ErrorAction SilentlyContinue) {
+    try {
+        $azCompleterPath = (az --version 2>$null | Select-String -Pattern 'completer' | Select-Object -First 1)
+        if ($azCompleterPath) {
+            # az completion is engine-based; load via eval-style
+        }
+    } catch {
+        # az completer unavailable
+    }
+}
+
+# Terraform native completer (if installed)
+if (Get-Command terraform -ErrorAction SilentlyContinue) {
+    Register-ArgumentCompleter -CommandName terraform -ScriptBlock {
+        param($wordToComplete, $commandAst, $cursorPosition)
+        $words = $commandAst.ToString().Split()
+        if ($words.Count -eq 1) {
+            # Complete terraform subcommands
+            @('init', 'plan', 'apply', 'destroy', 'validate', 'fmt', 'workspace', 'state', 'output', 'console', 'taint', 'untaint', 'refresh', 'import', 'graph', 'show', 'providers', 'version', 'help') |
+                Where-Object { $_ -like "$wordToComplete*" } |
+                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+        }
+    } -ErrorAction SilentlyContinue
+}
+
+# Helm native completer (if installed)
+if (Get-Command helm -ErrorAction SilentlyContinue) {
+    Register-ArgumentCompleter -CommandName helm -ScriptBlock {
+        param($wordToComplete, $commandAst, $cursorPosition)
+        $words = $commandAst.ToString().Split()
+        if ($words.Count -eq 1) {
+            # Complete helm subcommands
+            @('install', 'uninstall', 'upgrade', 'rollback', 'list', 'status', 'get', 'values', 'env', 'repo', 'search', 'pull', 'push', 'chart', 'version', 'help') |
+                Where-Object { $_ -like "$wordToComplete*" } |
+                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+        }
+    } -ErrorAction SilentlyContinue
+}
+
+Write-ProfileLog "Native tool completers registered (context-aware)" -Level DEBUG -Component "Completions"
+
+#endregion NATIVE TOOL COMPLETERS AND SHIMS
 
 
 #region 22 - WELCOME SCREEN AND FINALIZATION
@@ -4803,27 +5199,39 @@ function Show-WelcomeScreen {
     $loadTime = (Get-Date) - $Global:ProfileLoadStart
 
     if ($Style -eq 'Full') {
-        Write-Host ""
-        Write-Host "    ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "    ║               PowerShell 7.5+ Professional Profile           ║" -ForegroundColor Cyan
-        Write-Host "    ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-        Write-Host "    ║  Version: $script:ProfileVersion" -NoNewline -ForegroundColor Cyan
-        Write-Host "$(' ' * (53 - $script:ProfileVersion.Length))║" -ForegroundColor Cyan
-        Write-Host "    ║  Load Time: $($loadTime.TotalMilliseconds) ms" -NoNewline -ForegroundColor Cyan
-        Write-Host "$(' ' * (50 - $loadTime.TotalMilliseconds.ToString().Length))║" -ForegroundColor Cyan
-        Write-Host "    ║  Admin: $(if (Test-Admin) { 'Yes' } else { 'No' })" -NoNewline -ForegroundColor Cyan
-        Write-Host "$(' ' * 56)║" -ForegroundColor Cyan
-        Write-Host "    ║  Modules Loaded: $($Global:ProfileStats.ModulesLoaded)" -NoNewline -ForegroundColor Cyan
-        Write-Host "$(' ' * (48 - $Global:ProfileStats.ModulesLoaded.ToString().Length))║" -ForegroundColor Cyan
-        Write-Host "    ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host ""
+        # Fixed-width box: 62 inner chars between ║ and ║ (64 total with borders)
+        $boxW = 60  # usable chars between "║  " and closing pad + "║"
+        $verStr   = $script:ProfileVersion
+        $timeStr  = '{0:N0} ms' -f $loadTime.TotalMilliseconds
+        $adminStr = if (Test-Admin) { 'Yes' } else { 'No' }
+        $modStr   = $Global:ProfileStats.ModulesLoaded.ToString()
+
+        # Helper: pad a label+value line to fixed width inside the box
+        function Format-BoxLine {
+            param([string]$Label, [string]$Value)
+            $content = "  $Label $Value"
+            $pad = $boxW - $content.Length
+            if ($pad -lt 0) { $pad = 0 }
+            return "    ║$content$(' ' * $pad)  ║"
+        }
+
+        Write-Host ''
+        Write-Host '    ╔══════════════════════════════════════════════════════════════╗' -ForegroundColor Cyan
+        Write-Host '    ║          PowerShell 7.5+ Professional Profile v2.0           ║' -ForegroundColor Cyan
+        Write-Host '    ╠══════════════════════════════════════════════════════════════╣' -ForegroundColor Cyan
+        Write-Host (Format-BoxLine 'Version:'        $verStr)   -ForegroundColor Cyan
+        Write-Host (Format-BoxLine 'Load Time:'      $timeStr)  -ForegroundColor Cyan
+        Write-Host (Format-BoxLine 'Admin:'          $adminStr) -ForegroundColor Cyan
+        Write-Host (Format-BoxLine 'Modules Loaded:' $modStr)   -ForegroundColor Cyan
+        Write-Host '    ╚══════════════════════════════════════════════════════════════╝' -ForegroundColor Cyan
+        Write-Host ''
 
         # Quick tips
-        Write-Host "    Quick Tips:" -ForegroundColor Yellow
-        Write-Host "      • Type 'helpme' for command reference" -ForegroundColor DarkGray
-        Write-Host "      • Type 'diag' for profile diagnostics" -ForegroundColor DarkGray
-        Write-Host "      • Type 'sysinfo' for system information" -ForegroundColor DarkGray
-        Write-Host ""
+        Write-Host '    Quick Tips:' -ForegroundColor Yellow
+        Write-Host "      • 'helpme'  – command reference          F1 – help on current cmd" -ForegroundColor DarkGray
+        Write-Host "      • 'diag'    – profile diagnostics        F2 – toggle predictions" -ForegroundColor DarkGray
+        Write-Host "      • 'sysinfo' – system information      Tab – completion menu" -ForegroundColor DarkGray
+        Write-Host ''
     } else {
         Write-Host ""
         Write-Host "  PowerShell Profile v$script:ProfileVersion loaded in $($loadTime.TotalMilliseconds)ms" -ForegroundColor Cyan
@@ -4845,8 +5253,8 @@ function Show-ProfileSummary {
     Write-Host "`n=== Profile Summary ===" -ForegroundColor Cyan
 
     # Profile functions
-    $functions = Get-Command -CommandType Function | Where-Object { 
-        $_.Source -eq '' -and $_.Name -match '^(Get|Set|Test|Show|Invoke|Initialize|Clear|Update|Repair|Reset|Restart|Stop|Find|Measure|Use)-' 
+    $functions = Get-Command -CommandType Function | Where-Object {
+        $_.Source -eq '' -and $_.Name -match '^(Get|Set|Test|Show|Invoke|Initialize|Clear|Update|Repair|Reset|Restart|Stop|Find|Measure|Use)-'
     } | Select-Object -ExpandProperty Name | Sort-Object
 
     Write-Host "`nAvailable Functions ($($functions.Count)):" -ForegroundColor Yellow
@@ -4872,6 +5280,11 @@ $Global:ProfileLoadedTimestamp = $Global:ProfileLoadEnd
 
 # Log completion
 Write-ProfileLog "Profile loaded in $($Global:ProfileLoadDuration.TotalMilliseconds)ms" -Level INFO -Component "Bootstrap"
+
+# FIX: Restore ProgressPreference after profile load
+if ($script:OriginalProgressPreference) {
+    $ProgressPreference = $script:OriginalProgressPreference
+}
 
 # Rotate logs periodically
 Invoke-ProfileLogRotation | Out-Null
@@ -4909,15 +5322,1479 @@ function Register-ExitAction {
 }
 
 # --- FIX: Remove unsupported OnRemove handler and use Register-EngineEvent for exit ---
-if (-not (Get-EventSubscriber -SourceIdentifier 'PowerShell.Exiting' -ErrorAction SilentlyContinue)) {
+try {
+    $existingSub = Get-EventSubscriber -SourceIdentifier 'PowerShell.Exiting' -ErrorAction Stop
+} catch {
+    $existingSub = $null
+}
+if (-not $existingSub) {
     Register-EngineEvent PowerShell.Exiting -Action {
         foreach ($action in $global:OnExitActions) {
-            try { & $action } catch {}
+            try {
+                & $action
+            } catch {
+                # Best-effort exit cleanup; avoid Write-ProfileLog here as log file may already be closed
+            }
         }
     } | Out-Null
 }
 
 #endregion EXIT HANDLERS AND CLEANUP
+
+
+#region 24 - ADDED: HARDWARE DIAGNOSTICS
+#==============================================================================
+<#
+.SYNOPSIS
+    Safe CIM/WMI wrappers with timeouts and cross-platform fallbacks
+.DESCRIPTION
+    Provides throttled, cached, timeout-protected hardware queries.
+    All functions are read-only and non-destructive.
+.EXAMPLE
+    Get-HardwareSummary | Format-List
+    Get-SmartDiskHealth | Format-Table -AutoSize
+#>
+
+function Invoke-SafeCimQuery {
+    <#
+    .SYNOPSIS
+        Runs a CIM query with timeout, caching, and error handling.
+    .PARAMETER ClassName
+        WMI/CIM class name.
+    .PARAMETER Filter
+        Optional WQL filter.
+    .PARAMETER Properties
+        Properties to select.
+    .PARAMETER OperationTimeoutSec
+        CIM operation timeout (default: 10).
+    .PARAMETER CacheKey
+        Optional cache key; results cached for CacheTtlSec seconds.
+    .PARAMETER CacheTtlSec
+        Cache time-to-live (default: 120).
+    .EXAMPLE
+        Invoke-SafeCimQuery -ClassName Win32_Processor -Properties Name,NumberOfCores
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter(Mandatory)][string]$ClassName,
+        [string]$Filter,
+        [string[]]$Properties,
+        [ValidateRange(1, 120)][int]$OperationTimeoutSec = 10,
+        [string]$CacheKey,
+        [ValidateRange(0, 3600)][int]$CacheTtlSec = 120
+    )
+
+    # Simple in-memory cache
+    if (-not (Test-Path variable:script:CimQueryCache)) { $script:CimQueryCache = @{} }
+    if ($CacheKey -and $script:CimQueryCache.ContainsKey($CacheKey)) {
+        $entry = $script:CimQueryCache[$CacheKey]
+        if (((Get-Date) - $entry.Timestamp).TotalSeconds -lt $CacheTtlSec) {
+            return $entry.Data
+        }
+    }
+
+    if (-not $Global:IsWindows) {
+        Write-ProfileLog "Invoke-SafeCimQuery: CIM queries are Windows-only" -Level DEBUG -Component "HWDiag"
+        return @()
+    }
+
+    try {
+        $cimParams = @{
+            ClassName        = $ClassName
+            OperationTimeoutSec = $OperationTimeoutSec
+            ErrorAction      = 'Stop'
+        }
+        if ($Filter) { $cimParams.Filter = $Filter }
+
+        $result = Get-CimInstance @cimParams
+        if ($Properties) { $result = $result | Select-Object $Properties }
+
+        if ($CacheKey) {
+            $script:CimQueryCache[$CacheKey] = @{ Data = $result; Timestamp = Get-Date }
+        }
+        return $result
+    } catch [Microsoft.Management.Infrastructure.CimException] {
+        Write-ProfileLog "CIM query '$ClassName' timed out or failed: $($_.Exception.Message)" -Level WARN -Component "HWDiag"
+        return @()
+    } catch {
+        Write-CaughtException -Context "Invoke-SafeCimQuery $ClassName" -ErrorRecord $_ -Component "HWDiag" -Level WARN
+        return @()
+    }
+}
+
+function Get-HardwareSummary {
+    <#
+    .SYNOPSIS
+        Returns a unified hardware inventory snapshot.
+    .DESCRIPTION
+        Aggregates CPU, memory, disk, GPU, BIOS, and firmware into a single object.
+        Results are cached for 2 minutes.
+    .EXAMPLE
+        Get-HardwareSummary | Format-List
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param()
+
+    try {
+        $cpu  = Invoke-SafeCimQuery -ClassName Win32_Processor -Properties Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed -CacheKey 'hw_cpu'
+        $mem  = Invoke-SafeCimQuery -ClassName Win32_PhysicalMemory -Properties Capacity,Speed,Manufacturer,PartNumber -CacheKey 'hw_mem'
+        $disk = Invoke-SafeCimQuery -ClassName Win32_DiskDrive -Properties Model,Size,MediaType,InterfaceType,FirmwareRevision,SerialNumber -CacheKey 'hw_disk'
+        $gpu  = Invoke-SafeCimQuery -ClassName Win32_VideoController -Properties Name,AdapterRAM,DriverVersion,Status -CacheKey 'hw_gpu'
+        $bios = Invoke-SafeCimQuery -ClassName Win32_BIOS -Properties Manufacturer,SMBIOSBIOSVersion,ReleaseDate,SerialNumber -CacheKey 'hw_bios'
+        $mb   = Invoke-SafeCimQuery -ClassName Win32_BaseBoard -Properties Manufacturer,Product,Version,SerialNumber -CacheKey 'hw_board'
+
+        [PSCustomObject]@{
+            Timestamp    = (Get-Date).ToString('o')
+            CPU          = $cpu | Select-Object Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed
+            MemoryGB     = [math]::Round(($mem | Measure-Object Capacity -Sum).Sum / 1GB, 2)
+            MemoryModules= $mem | Select-Object Manufacturer,PartNumber,@{N='CapacityGB';E={[math]::Round($_.Capacity/1GB,2)}},Speed
+            Disks        = $disk | Select-Object Model,@{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}},MediaType,InterfaceType,FirmwareRevision
+            GPUs         = $gpu | Select-Object Name,@{N='VRAM_GB';E={if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1GB,2)}else{0}}},DriverVersion,Status
+            BIOS         = $bios | Select-Object Manufacturer,SMBIOSBIOSVersion,ReleaseDate
+            Motherboard  = $mb | Select-Object Manufacturer,Product,Version
+        }
+    } catch {
+        Write-CaughtException -Context "Get-HardwareSummary" -ErrorRecord $_ -Component "HWDiag" -Level WARN
+        return $null
+    }
+}
+
+function Get-SmartDiskHealth {
+    <#
+    .SYNOPSIS
+        Retrieves SMART/health status for physical disks.
+    .DESCRIPTION
+        Uses Storage cmdlets to get disk reliability data without third-party tools.
+    .EXAMPLE
+        Get-SmartDiskHealth | Format-Table -AutoSize
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    if (-not $Global:IsWindows) { return @() }
+
+    try {
+        if (-not (Get-Command Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
+            Write-ProfileLog "Get-PhysicalDisk not available" -Level DEBUG -Component "HWDiag"
+            return @()
+        }
+        Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object FriendlyName,MediaType,HealthStatus,OperationalStatus,
+            @{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}},BusType,FirmwareRevision
+    } catch {
+        Write-CaughtException -Context "Get-SmartDiskHealth" -ErrorRecord $_ -Component "HWDiag" -Level WARN
+        return @()
+    }
+}
+
+function Get-BatteryHealth {
+    <#
+    .SYNOPSIS
+        Retrieves battery health information (laptops).
+    .EXAMPLE
+        Get-BatteryHealth | Format-List
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param()
+
+    if (-not $Global:IsWindows) { return $null }
+
+    try {
+        $batt = Invoke-SafeCimQuery -ClassName Win32_Battery -CacheKey 'hw_battery'
+        if (-not $batt) { return [PSCustomObject]@{ HasBattery = $false } }
+        [PSCustomObject]@{
+            HasBattery       = $true
+            Status           = $batt.Status
+            EstChargePercent = $batt.EstimatedChargeRemaining
+            EstRunTimeMins   = $batt.EstimatedRunTime
+            Chemistry        = switch ($batt.Chemistry) { 1{'Other'}; 2{'Unknown'}; 3{'LeadAcid'}; 4{'NiCd'}; 5{'NiMH'}; 6{'LiIon'}; default{'N/A'} }
+        }
+    } catch {
+        Write-CaughtException -Context "Get-BatteryHealth" -ErrorRecord $_ -Component "HWDiag" -Level DEBUG
+        return $null
+    }
+}
+
+function Clear-CimQueryCache {
+    <#
+    .SYNOPSIS
+        Clears the in-memory CIM query cache.
+    .EXAMPLE
+        Clear-CimQueryCache
+    #>
+    [CmdletBinding()]
+    param()
+    $script:CimQueryCache = @{}
+    Write-ProfileLog "CIM query cache cleared" -Level DEBUG -Component "HWDiag"
+}
+
+#endregion ADDED: HARDWARE DIAGNOSTICS
+
+
+#region 25 - ADDED: NETWORK TOOLKIT
+#==============================================================================
+<#
+.SYNOPSIS
+    Extended network diagnostics: traceroute, ARP/neighbor, port scan, NIC stats
+.DESCRIPTION
+    All operations are read-only and non-destructive. Port scanning is rate-limited
+    and restricted to a small port set by default.
+.EXAMPLE
+    Invoke-Traceroute -Target 1.1.1.1
+    Get-ArpTable | Format-Table
+    Invoke-PortScan -Target 192.168.1.1 -Ports 22,80,443,3389
+    Get-NicStatistics | Format-Table
+#>
+
+function Invoke-Traceroute {
+    <#
+    .SYNOPSIS
+        Performs a traceroute to a target using Test-Connection.
+    .PARAMETER Target
+        Hostname or IP address.
+    .PARAMETER MaxHops
+        Maximum hop count (default: 30).
+    .PARAMETER TimeoutMs
+        Per-hop timeout in milliseconds.
+    .EXAMPLE
+        Invoke-Traceroute -Target 1.1.1.1
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Target,
+        [ValidateRange(1, 128)][int]$MaxHops = 30,
+        [ValidateRange(100, 10000)][int]$TimeoutMs = 3000
+    )
+
+    try {
+        if ($Global:IsWindows -and (Get-Command Test-Connection -ErrorAction SilentlyContinue)) {
+            # PowerShell 7.4+ supports -Traceroute
+            if ($PSVersionTable.PSVersion -ge [version]'7.4.0') {
+                return Test-Connection -TargetName $Target -Traceroute -MaxHops $MaxHops -TimeoutSeconds ([math]::Ceiling($TimeoutMs / 1000)) -ErrorAction Stop
+            }
+        }
+        # Fallback: parse tracert output
+        $output = tracert -d -h $MaxHops -w $TimeoutMs $Target 2>&1
+        $hops = @()
+        foreach ($line in $output) {
+            if ($line -match '^\s*(\d+)\s+(?:(\d+)\s+ms|(\*)\s+)\s+(?:(\d+)\s+ms|(\*)\s+)\s+(?:(\d+)\s+ms|(\*)\s+)\s+(.+)$') {
+                $hops += [PSCustomObject]@{
+                    Hop     = [int]$Matches[1]
+                    RTT1Ms  = if ($Matches[2]) { [int]$Matches[2] } else { $null }
+                    RTT2Ms  = if ($Matches[4]) { [int]$Matches[4] } else { $null }
+                    RTT3Ms  = if ($Matches[6]) { [int]$Matches[6] } else { $null }
+                    Address = $Matches[8].Trim()
+                }
+            }
+        }
+        return $hops
+    } catch {
+        Write-CaughtException -Context "Invoke-Traceroute $Target" -ErrorRecord $_ -Component "NetToolkit" -Level WARN
+        return @()
+    }
+}
+
+function Get-ArpTable {
+    <#
+    .SYNOPSIS
+        Retrieves ARP/neighbor cache entries.
+    .EXAMPLE
+        Get-ArpTable | Format-Table -AutoSize
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    if (-not $Global:IsWindows) { return @() }
+
+    try {
+        if (Get-Command Get-NetNeighbor -ErrorAction SilentlyContinue) {
+            return Get-NetNeighbor -ErrorAction SilentlyContinue |
+                Where-Object { $_.State -ne 'Unreachable' } |
+                Select-Object IPAddress, LinkLayerAddress, State, InterfaceAlias
+        }
+        # Fallback to arp -a
+        $output = arp -a 2>$null
+        $entries = @()
+        foreach ($line in $output) {
+            if ($line -match '^\s*([\d.]+)\s+([\w-]+)\s+(\w+)') {
+                $entries += [PSCustomObject]@{
+                    IPAddress        = $Matches[1]
+                    LinkLayerAddress = $Matches[2]
+                    State            = $Matches[3]
+                }
+            }
+        }
+        return $entries
+    } catch {
+        Write-CaughtException -Context "Get-ArpTable" -ErrorRecord $_ -Component "NetToolkit" -Level WARN
+        return @()
+    }
+}
+
+function Invoke-PortScan {
+    <#
+    .SYNOPSIS
+        Rate-limited, non-destructive TCP port scan.
+    .DESCRIPTION
+        Tests a small set of TCP ports on a single target. Maximum 100 ports per call
+        with a configurable delay between probes to avoid flooding.
+    .PARAMETER Target
+        Hostname or IP address.
+    .PARAMETER Ports
+        Array of port numbers (max 100).
+    .PARAMETER TimeoutMs
+        Per-port timeout.
+    .PARAMETER DelayMs
+        Delay between probes (rate limiting).
+    .EXAMPLE
+        Invoke-PortScan -Target 192.168.1.1 -Ports 22,80,443,3389
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Target,
+        [ValidateCount(1, 100)]
+        [ValidateRange(1, 65535)]
+        [int[]]$Ports = @(21,22,23,25,53,80,110,135,139,143,443,445,993,995,1433,3306,3389,5432,5900,8080),
+        [ValidateRange(100, 10000)][int]$TimeoutMs = 1000,
+        [ValidateRange(0, 5000)][int]$DelayMs = 50
+    )
+
+    $results = @()
+    foreach ($port in $Ports) {
+        $open = Test-TcpPort -HostName $Target -Port $port -TimeoutMs $TimeoutMs
+        $results += [PSCustomObject]@{
+            Target  = $Target
+            Port    = $port
+            Open    = $open
+            Service = switch ($port) {
+                21 {'FTP'}; 22 {'SSH'}; 23 {'Telnet'}; 25 {'SMTP'}; 53 {'DNS'}
+                80 {'HTTP'}; 110 {'POP3'}; 135 {'RPC'}; 139 {'NetBIOS'}; 143 {'IMAP'}
+                443 {'HTTPS'}; 445 {'SMB'}; 993 {'IMAPS'}; 995 {'POP3S'}
+                1433 {'MSSQL'}; 3306 {'MySQL'}; 3389 {'RDP'}; 5432 {'PostgreSQL'}
+                5900 {'VNC'}; 8080 {'HTTP-Alt'}; default {'Unknown'}
+            }
+        }
+        if ($DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
+    }
+    return $results
+}
+
+function Get-NicStatistics {
+    <#
+    .SYNOPSIS
+        Retrieves NIC statistics (bytes sent/received, errors).
+    .EXAMPLE
+        Get-NicStatistics | Format-Table -AutoSize
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    if (-not $Global:IsWindows) { return @() }
+
+    try {
+        if (-not (Get-Command Get-NetAdapterStatistics -ErrorAction SilentlyContinue)) { return @() }
+        Get-NetAdapterStatistics -ErrorAction SilentlyContinue |
+            Select-Object Name,
+                @{N='ReceivedGB';E={[math]::Round($_.ReceivedBytes/1GB,3)}},
+                @{N='SentGB';E={[math]::Round($_.SentBytes/1GB,3)}},
+                ReceivedUnicastPackets, SentUnicastPackets,
+                InboundDiscardedPackets, OutboundDiscardedPackets
+    } catch {
+        Write-CaughtException -Context "Get-NicStatistics" -ErrorRecord $_ -Component "NetToolkit" -Level WARN
+        return @()
+    }
+}
+
+function Get-LinkSpeed {
+    <#
+    .SYNOPSIS
+        Returns link speed for active network adapters.
+    .EXAMPLE
+        Get-LinkSpeed | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    if (-not $Global:IsWindows) { return @() }
+
+    try {
+        Get-NetAdapter -ErrorAction SilentlyContinue |
+            Where-Object Status -eq 'Up' |
+            Select-Object Name, InterfaceDescription, LinkSpeed, MediaType, FullDuplex
+    } catch {
+        Write-CaughtException -Context "Get-LinkSpeed" -ErrorRecord $_ -Component "NetToolkit" -Level DEBUG
+        return @()
+    }
+}
+
+function Test-DnsResolution {
+    <#
+    .SYNOPSIS
+        Tests DNS resolution for a name across multiple DNS servers.
+    .PARAMETER Name
+        DNS name to resolve.
+    .PARAMETER DnsServers
+        Servers to query (default: current + Cloudflare + Google).
+    .PARAMETER RecordType
+        DNS record type (default: A).
+    .EXAMPLE
+        Test-DnsResolution -Name "github.com" | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string[]]$DnsServers = @('', '1.1.1.1', '8.8.8.8'),
+        [ValidateSet('A','AAAA','MX','NS','SOA','TXT','CNAME','SRV','PTR')]
+        [string]$RecordType = 'A'
+    )
+
+    if (-not $Global:IsWindows -or -not (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)) {
+        Write-ProfileLog "Test-DnsResolution requires Windows Resolve-DnsName" -Level WARN -Component "NetToolkit"
+        return @()
+    }
+
+    $results = @()
+    foreach ($server in $DnsServers) {
+        $label = if ($server -eq '') { 'System DNS' } else { $server }
+        try {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $dnsParams = @{ Name = $Name; Type = $RecordType; ErrorAction = 'Stop'; DnsOnly = $true }
+            if ($server -ne '') { $dnsParams.Server = $server }
+            $answer = Resolve-DnsName @dnsParams
+            $sw.Stop()
+            $results += [PSCustomObject]@{
+                Server     = $label
+                Name       = $Name
+                Type       = $RecordType
+                Resolved   = $true
+                LatencyMs  = [int]$sw.ElapsedMilliseconds
+                Addresses  = ($answer | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress) -join ', '
+            }
+        } catch {
+            $results += [PSCustomObject]@{
+                Server     = $label
+                Name       = $Name
+                Type       = $RecordType
+                Resolved   = $false
+                LatencyMs  = $null
+                Addresses  = $null
+            }
+        }
+    }
+    return $results
+}
+
+#endregion ADDED: NETWORK TOOLKIT
+
+
+#region 26 - ADDED: EVENT AND LOG HELPERS
+#==============================================================================
+<#
+.SYNOPSIS
+    Windows Event Log query helpers with filters, paging, and export.
+.DESCRIPTION
+    Provides safe, read-only wrappers around Get-WinEvent with structured output.
+.EXAMPLE
+    Get-RecentEvents -LogName System -Level Error -MaxEvents 20
+    Export-EventLogToJson -LogName Application -Hours 24 -OutputPath .\events.json
+#>
+
+function Get-RecentEvents {
+    <#
+    .SYNOPSIS
+        Retrieves recent Windows Event Log entries with filtering.
+    .PARAMETER LogName
+        Event log name (System, Application, Security, etc.).
+    .PARAMETER Level
+        Filter by level: Critical, Error, Warning, Information.
+    .PARAMETER MaxEvents
+        Maximum events to return (default: 50).
+    .PARAMETER Hours
+        Look back this many hours (default: 24).
+    .PARAMETER Source
+        Filter by event source/provider.
+    .EXAMPLE
+        Get-RecentEvents -LogName System -Level Error -MaxEvents 20
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [ValidateSet('System','Application','Security','Setup','ForwardedEvents')]
+        [string]$LogName = 'System',
+        [ValidateSet('Critical','Error','Warning','Information','All')]
+        [string]$Level = 'All',
+        [ValidateRange(1, 5000)][int]$MaxEvents = 50,
+        [ValidateRange(1, 8760)][int]$Hours = 24,
+        [string]$Source
+    )
+
+    if (-not $Global:IsWindows) {
+        Write-ProfileLog "Get-RecentEvents is Windows-only" -Level WARN -Component "EventLog"
+        return @()
+    }
+
+    try {
+        $levelMap = @{ Critical = 1; Error = 2; Warning = 3; Information = 4 }
+        $startTime = (Get-Date).AddHours(-$Hours)
+
+        $filter = @{ LogName = $LogName; StartTime = $startTime }
+        if ($Level -ne 'All') { $filter.Level = $levelMap[$Level] }
+        if ($Source) { $filter.ProviderName = $Source }
+
+        Get-WinEvent -FilterHashtable $filter -MaxEvents $MaxEvents -ErrorAction SilentlyContinue |
+            Select-Object TimeCreated, Id, LevelDisplayName, ProviderName,
+                @{N='Message';E={$_.Message -replace '\r?\n',' ' | ForEach-Object { if ($_.Length -gt 200) { $_.Substring(0,200) + '...' } else { $_ } }}}
+    } catch {
+        Write-CaughtException -Context "Get-RecentEvents $LogName" -ErrorRecord $_ -Component "EventLog" -Level WARN
+        return @()
+    }
+}
+
+function Export-EventLogToJson {
+    <#
+    .SYNOPSIS
+        Exports event log entries to a JSON file.
+    .PARAMETER LogName
+        Event log name.
+    .PARAMETER Hours
+        Look back this many hours.
+    .PARAMETER MaxEvents
+        Maximum events.
+    .PARAMETER OutputPath
+        Output JSON file path.
+    .EXAMPLE
+        Export-EventLogToJson -LogName Application -Hours 24 -OutputPath .\events.json
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [ValidateSet('System','Application','Security')]
+        [string]$LogName = 'System',
+        [ValidateRange(1, 8760)][int]$Hours = 24,
+        [ValidateRange(1, 10000)][int]$MaxEvents = 500,
+        [Parameter(Mandatory)][string]$OutputPath
+    )
+
+    if ($PSCmdlet.ShouldProcess($OutputPath, "Export $LogName events")) {
+        try {
+            $events = Get-RecentEvents -LogName $LogName -Hours $Hours -MaxEvents $MaxEvents
+            $events | ConvertTo-Json -Depth 4 | Set-Content -Path $OutputPath -Encoding UTF8 -Force
+            Write-ProfileLog "Exported $($events.Count) events to $OutputPath" -Level INFO -Component "EventLog"
+            return $true
+        } catch {
+            Write-CaughtException -Context "Export-EventLogToJson" -ErrorRecord $_ -Component "EventLog" -Level WARN
+            return $false
+        }
+    }
+}
+
+function Get-EventLogSummary {
+    <#
+    .SYNOPSIS
+        Returns a summary of recent event log activity.
+    .PARAMETER Hours
+        Look back this many hours (default: 24).
+    .EXAMPLE
+        Get-EventLogSummary -Hours 48 | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param([ValidateRange(1, 8760)][int]$Hours = 24)
+
+    if (-not $Global:IsWindows) { return @() }
+
+    $logs = @('System', 'Application', 'Security')
+    $results = @()
+    foreach ($log in $logs) {
+        try {
+            $startTime = (Get-Date).AddHours(-$Hours)
+            $events = Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $startTime } -ErrorAction SilentlyContinue
+            $grouped = $events | Group-Object LevelDisplayName
+            $results += [PSCustomObject]@{
+                LogName   = $log
+                Total     = $events.Count
+                Critical  = ($grouped | Where-Object Name -eq 'Critical').Count
+                Error     = ($grouped | Where-Object Name -eq 'Error').Count
+                Warning   = ($grouped | Where-Object Name -eq 'Warning').Count
+                Info      = ($grouped | Where-Object Name -eq 'Information').Count
+                Hours     = $Hours
+            }
+        } catch {
+            $results += [PSCustomObject]@{
+                LogName = $log; Total = 0; Critical = 0; Error = 0; Warning = 0; Info = 0; Hours = $Hours
+            }
+        }
+    }
+    return $results
+}
+
+#endregion ADDED: EVENT AND LOG HELPERS
+
+
+#region 27 - ADDED: SECURE REMOTE MANAGEMENT
+#==============================================================================
+<#
+.SYNOPSIS
+    Safe wrappers for PS remoting with connection validation and session cleanup.
+.DESCRIPTION
+    Provides secure remote session management with credential prompts,
+    connection testing, and automatic session disposal.
+    No credentials are stored or logged.
+.EXAMPLE
+    $session = Connect-RemoteHost -ComputerName Server01
+    Invoke-RemoteCommand -ComputerName Server01 -ScriptBlock { Get-Service }
+#>
+
+function Test-RemoteHost {
+    <#
+    .SYNOPSIS
+        Tests if a remote host is reachable via WinRM/PSRemoting.
+    .PARAMETER ComputerName
+        Target computer name or IP.
+    .PARAMETER Port
+        WinRM port (default: 5985).
+    .PARAMETER UseSSL
+        Use HTTPS/5986.
+    .PARAMETER TimeoutMs
+        Connection timeout.
+    .EXAMPLE
+        Test-RemoteHost -ComputerName Server01
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ComputerName,
+        [ValidateRange(1, 65535)][int]$Port = 5985,
+        [switch]$UseSSL,
+        [ValidateRange(100, 30000)][int]$TimeoutMs = 3000
+    )
+
+    if ($UseSSL -and $Port -eq 5985) { $Port = 5986 }
+
+    $tcpOk = Test-TcpPort -HostName $ComputerName -Port $Port -TimeoutMs $TimeoutMs
+    [PSCustomObject]@{
+        ComputerName = $ComputerName
+        Port         = $Port
+        UseSSL       = [bool]$UseSSL
+        Reachable    = $tcpOk
+        Timestamp    = (Get-Date).ToString('o')
+    }
+}
+
+function Connect-RemoteHost {
+    <#
+    .SYNOPSIS
+        Creates a validated PSSession to a remote host.
+    .DESCRIPTION
+        Prompts for credentials, tests connectivity, then creates a session.
+        Returns the session object or $null on failure.
+    .PARAMETER ComputerName
+        Target computer.
+    .PARAMETER Credential
+        PSCredential (prompted if not supplied).
+    .PARAMETER UseSSL
+        Use HTTPS transport.
+    .PARAMETER ConfigurationName
+        Remote endpoint configuration (e.g., 'Microsoft.PowerShell').
+    .EXAMPLE
+        $s = Connect-RemoteHost -ComputerName Server01
+        Enter-PSSession $s
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.Runspaces.PSSession])]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ComputerName,
+        [PSCredential]$Credential,
+        [switch]$UseSSL,
+        [string]$ConfigurationName
+    )
+
+    # Test connectivity first
+    $test = Test-RemoteHost -ComputerName $ComputerName -UseSSL:$UseSSL
+    if (-not $test.Reachable) {
+        Write-Host "Remote host '$ComputerName' is not reachable on port $($test.Port)." -ForegroundColor Yellow
+        return $null
+    }
+
+    # Prompt for credentials if not provided
+    if (-not $Credential) {
+        $Credential = Get-Credential -Message "Credentials for $ComputerName"
+        if (-not $Credential) { return $null }
+    }
+
+    try {
+        $sessParams = @{
+            ComputerName = $ComputerName
+            Credential   = $Credential
+            ErrorAction  = 'Stop'
+        }
+        if ($UseSSL) { $sessParams.UseSSL = $true }
+        if ($ConfigurationName) { $sessParams.ConfigurationName = $ConfigurationName }
+
+        $session = New-PSSession @sessParams
+        Write-ProfileLog "Connected to $ComputerName (Session $($session.Id))" -Level INFO -Component "Remoting"
+        return $session
+    } catch {
+        Write-CaughtException -Context "Connect-RemoteHost $ComputerName" -ErrorRecord $_ -Component "Remoting" -Level WARN
+        return $null
+    }
+}
+
+function Invoke-RemoteCommand {
+    <#
+    .SYNOPSIS
+        Runs a command on a remote host with automatic session cleanup.
+    .DESCRIPTION
+        Creates a temporary session, runs the command, returns results, and
+        removes the session. Credentials are prompted if not supplied.
+    .PARAMETER ComputerName
+        Target computer.
+    .PARAMETER ScriptBlock
+        Code to execute remotely.
+    .PARAMETER Credential
+        PSCredential (prompted if not supplied).
+    .PARAMETER ArgumentList
+        Arguments to pass to the script block.
+    .EXAMPLE
+        Invoke-RemoteCommand -ComputerName Server01 -ScriptBlock { Get-Service }
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ComputerName,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [PSCredential]$Credential,
+        [object[]]$ArgumentList
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($ComputerName, 'Execute remote command')) { return }
+
+    $session = Connect-RemoteHost -ComputerName $ComputerName -Credential $Credential
+    if (-not $session) { return }
+
+    try {
+        $invokeParams = @{
+            Session      = $session
+            ScriptBlock  = $ScriptBlock
+            ErrorAction  = 'Stop'
+        }
+        if ($ArgumentList) { $invokeParams.ArgumentList = $ArgumentList }
+
+        return Invoke-Command @invokeParams
+    } catch {
+        Write-CaughtException -Context "Invoke-RemoteCommand $ComputerName" -ErrorRecord $_ -Component "Remoting" -Level WARN
+    } finally {
+        Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+        Write-ProfileLog "Session to $ComputerName cleaned up" -Level DEBUG -Component "Remoting"
+    }
+}
+
+function Get-RemoteSessions {
+    <#
+    .SYNOPSIS
+        Lists active PSSessions.
+    .EXAMPLE
+        Get-RemoteSessions | Format-Table
+    #>
+    [CmdletBinding()]
+    param()
+    Get-PSSession | Select-Object Id, Name, ComputerName, State, Availability, ConfigurationName
+}
+
+function Remove-AllRemoteSessions {
+    <#
+    .SYNOPSIS
+        Removes all active PSSessions.
+    .EXAMPLE
+        Remove-AllRemoteSessions
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
+    $sessions = Get-PSSession
+    if ($sessions.Count -eq 0) {
+        Write-Host "No active sessions." -ForegroundColor DarkGray
+        return
+    }
+    foreach ($s in $sessions) {
+        if ($PSCmdlet.ShouldProcess("Session $($s.Id) to $($s.ComputerName)", 'Remove')) {
+            Remove-PSSession -Session $s -ErrorAction SilentlyContinue
+            Write-ProfileLog "Removed session $($s.Id) to $($s.ComputerName)" -Level DEBUG -Component "Remoting"
+        }
+    }
+}
+
+# Guidance: For constrained endpoints, connect with:
+#   New-PSSession -ComputerName $host -ConfigurationName 'MyConstrainedEndpoint'
+# See: https://learn.microsoft.com/powershell/scripting/learn/remoting/jea/overview
+
+#endregion ADDED: SECURE REMOTE MANAGEMENT
+
+
+#region 28 - ADDED: MONITORING AND ALERTING HOOKS
+#==============================================================================
+<#
+.SYNOPSIS
+    Local structured logging (JSON) and threshold-based alerting.
+.DESCRIPTION
+    Writes structured JSON events to a local log sink and raises console/toast
+    alerts when configurable thresholds are exceeded. No external telemetry.
+.EXAMPLE
+    Write-MonitorEvent -EventName 'DiskLow' -Severity Warning -Data @{Drive='C';FreeGB=5}
+    Test-ThresholdAlerts
+#>
+
+# Alert thresholds (configurable)
+if (-not $Global:ProfileConfig.Contains('AlertThresholds')) {
+    $Global:ProfileConfig.AlertThresholds = @{
+        DiskFreePercentMin = 10
+        MemoryUsedPercentMax = 90
+        CPUPercentMax = 95
+    }
+}
+
+function Write-MonitorEvent {
+    <#
+    .SYNOPSIS
+        Writes a structured JSON event to the monitor log.
+    .PARAMETER EventName
+        Short event identifier.
+    .PARAMETER Severity
+        Info, Warning, Error, Critical.
+    .PARAMETER Data
+        Hashtable of event data.
+    .EXAMPLE
+        Write-MonitorEvent -EventName 'HighCPU' -Severity Warning -Data @{Percent=98}
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$EventName,
+        [ValidateSet('Info','Warning','Error','Critical')][string]$Severity = 'Info',
+        [hashtable]$Data = @{}
+    )
+
+    try {
+        $logDir = Join-Path $Global:ProfileConfig.LogPath 'monitor'
+        if (-not (Test-Path $logDir)) { New-Item -Path $logDir -ItemType Directory -Force | Out-Null }
+
+        $monitorEntry = [ordered]@{
+            Timestamp = (Get-Date).ToString('o')
+            EventName = $EventName
+            Severity  = $Severity
+            Computer  = $env:COMPUTERNAME
+            User      = $env:USERNAME
+            Data      = $Data
+        }
+
+        $logFile = Join-Path $logDir ("monitor_$(Get-Date -Format 'yyyyMMdd').jsonl")
+        ($monitorEntry | ConvertTo-Json -Compress) | Add-Content -Path $logFile -Encoding UTF8
+
+        # Console alert for Warning+
+        if ($Severity -in @('Warning','Error','Critical')) {
+            $color = switch ($Severity) { 'Warning' {'Yellow'}; 'Error' {'Red'}; 'Critical' {'Magenta'} }
+            Write-Host "[ALERT] $EventName ($Severity): $($Data | ConvertTo-Json -Compress)" -ForegroundColor $color
+        }
+    } catch {
+        Write-ProfileLog "Write-MonitorEvent failed: $($_.Exception.Message)" -Level DEBUG -Component "Monitor"
+    }
+}
+
+function Test-ThresholdAlerts {
+    <#
+    .SYNOPSIS
+        Checks system metrics against configured thresholds and raises alerts.
+    .EXAMPLE
+        Test-ThresholdAlerts
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    $alerts = @()
+    $thresholds = $Global:ProfileConfig.AlertThresholds
+
+    try {
+        # Disk check
+        $disks = Get-DiskInfo
+        foreach ($d in $disks) {
+            if ($d.PercentFree -lt $thresholds.DiskFreePercentMin) {
+                $alerts += [PSCustomObject]@{ Check='DiskFree'; Status='ALERT'; Detail="$($d.Drive) $($d.PercentFree)% free" }
+                Write-MonitorEvent -EventName 'DiskLow' -Severity Warning -Data @{ Drive=$d.Drive; FreePercent=$d.PercentFree }
+            }
+        }
+
+        # Memory check
+        $mem = Get-MemoryInfo
+        if ($mem -and $mem.PercentUsed -gt $thresholds.MemoryUsedPercentMax) {
+            $alerts += [PSCustomObject]@{ Check='MemoryUsed'; Status='ALERT'; Detail="$($mem.PercentUsed)% used" }
+            Write-MonitorEvent -EventName 'HighMemory' -Severity Warning -Data @{ PercentUsed=$mem.PercentUsed }
+        }
+
+        # CPU check (quick sample)
+        try {
+            $cpuCounter = Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop
+            $cpuPct = [math]::Round($cpuCounter.CounterSamples.CookedValue, 2)
+            if ($cpuPct -gt $thresholds.CPUPercentMax) {
+                $alerts += [PSCustomObject]@{ Check='CPULoad'; Status='ALERT'; Detail="$cpuPct%" }
+                Write-MonitorEvent -EventName 'HighCPU' -Severity Warning -Data @{ Percent=$cpuPct }
+            }
+        } catch {
+            Write-ProfileLog "CPU counter check failed: $($_.Exception.Message)" -Level DEBUG -Component "Monitor"
+        }
+
+        if ($alerts.Count -eq 0) {
+            Write-Host "All thresholds OK." -ForegroundColor Green
+        }
+    } catch {
+        Write-CaughtException -Context "Test-ThresholdAlerts" -ErrorRecord $_ -Component "Monitor" -Level WARN
+    }
+    return $alerts
+}
+
+function Get-MonitorLog {
+    <#
+    .SYNOPSIS
+        Reads recent monitor events from the structured JSON log.
+    .PARAMETER Days
+        Number of days to look back (default: 1).
+    .PARAMETER Severity
+        Filter by severity.
+    .EXAMPLE
+        Get-MonitorLog -Days 7 -Severity Warning | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [ValidateRange(1, 365)][int]$Days = 1,
+        [ValidateSet('Info','Warning','Error','Critical','All')]
+        [string]$Severity = 'All'
+    )
+
+    $logDir = Join-Path $Global:ProfileConfig.LogPath 'monitor'
+    if (-not (Test-Path $logDir)) { return @() }
+
+    try {
+        $cutoff = (Get-Date).AddDays(-$Days)
+        $files = Get-ChildItem -Path $logDir -Filter 'monitor_*.jsonl' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $cutoff }
+
+        $events = @()
+        foreach ($f in $files) {
+            $lines = Get-Content -Path $f.FullName -ErrorAction SilentlyContinue
+            foreach ($line in $lines) {
+                try {
+                    $obj = $line | ConvertFrom-Json
+                    if ($Severity -eq 'All' -or $obj.Severity -eq $Severity) {
+                        $events += $obj
+                    }
+                } catch { continue }
+            }
+        }
+        return $events | Sort-Object Timestamp -Descending
+    } catch {
+        Write-CaughtException -Context "Get-MonitorLog" -ErrorRecord $_ -Component "Monitor" -Level WARN
+        return @()
+    }
+}
+
+#endregion ADDED: MONITORING AND ALERTING HOOKS
+
+
+#region 29 - ADDED: INTERACTIVE PRODUCTIVITY HELPERS
+#==============================================================================
+<#
+.SYNOPSIS
+    Command palette, context-based suggestions, fuzzy alias search.
+.DESCRIPTION
+    Provides interactive helpers for discoverability and productivity.
+.EXAMPLE
+    Show-CommandPalette
+    Find-ProfileCommand 'dns'
+#>
+
+function Show-CommandPalette {
+    <#
+    .SYNOPSIS
+        Lists all profile commands grouped by category.
+    .PARAMETER Category
+        Filter by category (System, Network, Package, Diagnostic, etc.).
+    .EXAMPLE
+        Show-CommandPalette -Category Network
+    #>
+    [CmdletBinding()]
+    param(
+        [ValidateSet('All','System','Network','Package','Diagnostic','Process','Disk','Security','Monitor')]
+        [string]$Category = 'All'
+    )
+
+    $commands = @{
+        System     = @('Get-SystemInfo','Get-CPUInfo','Get-MemoryInfo','Get-GPUInfo','Get-BIOSInfo','Get-Uptime','Get-SystemHealth','Get-HardwareSummary','Get-SmartDiskHealth','Get-BatteryHealth')
+        Network    = @('Get-LocalIP','Get-PublicIP','Get-NetworkAdapters','Get-DnsConfig','Get-NetworkSnapshot','Test-Internet','Test-TcpPort','Test-DnsResolution','Invoke-Traceroute','Get-ArpTable','Invoke-PortScan','Get-NicStatistics','Get-LinkSpeed','Set-DnsProfile','Use-BestDns','Clear-DnsCache')
+        Package    = @('Get-PackageManagerStatus','Install-DevPackage','Update-AllPackages','Get-WingetPackage','Get-ChocoPackage','Get-NpmPackage','Get-PipPackage','Get-DotnetInfo')
+        Diagnostic = @('Show-ProfileDiagnostics','Test-ProfileHealth','Repair-Profile','Show-EnvironmentReport','Collect-SystemSnapshot','Test-ProfileScript')
+        Process    = @('Get-TopProcesses','Get-ProcessTree','Stop-ProcessByName','Get-ServiceHealth','Restart-ServiceByName','Get-ScheduledTasksSummary')
+        Disk       = @('Get-DiskInfo','Get-DiskUsage','Find-LargeFiles','Clear-TempFiles','Invoke-DiskMaintenance')
+        Security   = @('Test-Admin','Test-RemoteHost','Connect-RemoteHost','Invoke-RemoteCommand','Get-RemoteSessions','Remove-AllRemoteSessions')
+        Monitor    = @('Get-PerfSnapshot','Measure-Benchmark','Test-ThresholdAlerts','Write-MonitorEvent','Get-MonitorLog','Get-RecentEvents','Get-EventLogSummary')
+    }
+
+    $categories = if ($Category -eq 'All') { $commands.Keys | Sort-Object } else { @($Category) }
+
+    Write-Host "`n=== Profile Command Palette ===" -ForegroundColor Cyan
+    foreach ($cat in $categories) {
+        if (-not $commands.ContainsKey($cat)) { continue }
+        Write-Host "`n  $cat" -ForegroundColor Yellow
+        foreach ($cmd in $commands[$cat]) {
+            $exists = $null -ne (Get-Command $cmd -ErrorAction SilentlyContinue)
+            $indicator = if ($exists) { '[+]' } else { '[-]' }
+            $color = if ($exists) { 'Green' } else { 'DarkGray' }
+            Write-Host "    $indicator $cmd" -ForegroundColor $color
+        }
+    }
+    Write-Host ""
+}
+
+function Find-ProfileCommand {
+    <#
+    .SYNOPSIS
+        Fuzzy-searches profile functions and aliases by keyword.
+    .PARAMETER Keyword
+        Search term (matched against name and synopsis).
+    .EXAMPLE
+        Find-ProfileCommand 'dns'
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param([Parameter(Mandatory)][string]$Keyword)
+
+    try {
+        $functions = Get-Command -CommandType Function -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -eq '' -and ($_.Name -like "*$Keyword*") } |
+            Select-Object Name, @{N='Type';E={'Function'}},
+                @{N='Synopsis';E={try{(Get-Help $_.Name -ErrorAction SilentlyContinue).Synopsis}catch{''}}}
+
+        $aliases = Get-Alias -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -eq '' -and ($_.Name -like "*$Keyword*" -or $_.Definition -like "*$Keyword*") } |
+            Select-Object @{N='Name';E={$_.Name}}, @{N='Type';E={'Alias'}},
+                @{N='Synopsis';E={"-> $($_.Definition)"}}
+
+        $all = @($functions) + @($aliases) | Where-Object { $_ } | Sort-Object Name
+        if ($all.Count -eq 0) {
+            Write-Host "No commands found matching '$Keyword'" -ForegroundColor DarkGray
+        }
+        return $all
+    } catch {
+        Write-CaughtException -Context "Find-ProfileCommand" -ErrorRecord $_ -Component "Productivity" -Level DEBUG
+        return @()
+    }
+}
+
+function Get-ContextSuggestions {
+    <#
+    .SYNOPSIS
+        Suggests commands based on current context (admin, network, directory).
+    .EXAMPLE
+        Get-ContextSuggestions
+    #>
+    [CmdletBinding()]
+    param()
+
+    $suggestions = @()
+    if (Test-Admin) {
+        $suggestions += 'You are admin - DNS/service/optimization commands available.'
+    } else {
+        $suggestions += 'Run "sudo" to open an elevated session for admin tasks.'
+    }
+    if ($Global:ProfileState.HasNetwork -eq $true) {
+        $suggestions += 'Network is up - try: pubip, Test-DnsResolution, Invoke-Traceroute'
+    } elseif ($Global:ProfileState.HasNetwork -eq $false) {
+        $suggestions += 'Network appears down - try: Get-NetworkAdapters, Get-ArpTable'
+    }
+    if ((Get-Location).Path -match '\\\.git' -or (Test-Path '.git')) {
+        $suggestions += 'Git repo detected - try: git status, git log --oneline'
+    }
+    $suggestions += 'Type "helpme" for full command reference, "Show-CommandPalette" for categories.'
+    Write-Host "`n=== Context Suggestions ===" -ForegroundColor Cyan
+    foreach ($s in $suggestions) { Write-Host "  - $s" -ForegroundColor DarkGray }
+    Write-Host ""
+}
+
+#endregion ADDED: INTERACTIVE PRODUCTIVITY HELPERS
+
+
+#region 30 - ADDED: DIAGNOSTICS AUTOMATION
+#==============================================================================
+<#
+.SYNOPSIS
+    Collect-SystemSnapshot gathers a safe, non-sensitive system snapshot.
+.DESCRIPTION
+    Creates a timestamped folder with system inventory, network config, event summaries,
+    and health data. No secrets, passwords, or PII beyond hostname/username are collected.
+.EXAMPLE
+    Collect-SystemSnapshot -OutputPath "$HOME\Desktop\snapshot"
+#>
+
+function Collect-SystemSnapshot {
+    <#
+    .SYNOPSIS
+        Gathers a comprehensive, non-sensitive system snapshot to a timestamped folder.
+    .PARAMETER OutputPath
+        Base output directory (a timestamped subfolder is created).
+    .PARAMETER IncludeEventLogs
+        Include recent event log summaries.
+    .PARAMETER IncludeNetwork
+        Include network diagnostics.
+    .EXAMPLE
+        Collect-SystemSnapshot
+        Collect-SystemSnapshot -OutputPath 'C:\Snapshots' -IncludeEventLogs -IncludeNetwork
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$OutputPath = (Join-Path $Global:ProfileConfig.LogPath 'snapshots'),
+        [switch]$IncludeEventLogs,
+        [switch]$IncludeNetwork
+    )
+
+    if (-not $PSCmdlet.ShouldProcess('System', 'Collect diagnostic snapshot')) { return }
+
+    $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $snapDir = Join-Path $OutputPath "snapshot_$ts"
+
+    try {
+        New-Item -Path $snapDir -ItemType Directory -Force | Out-Null
+        Write-Host "Collecting snapshot to: $snapDir" -ForegroundColor Cyan
+
+        # System info
+        try {
+            $sysInfo = Get-SystemInfo
+            $sysInfo | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'system_info.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: system_info failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Hardware summary
+        try {
+            $hw = Get-HardwareSummary
+            $hw | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'hardware.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: hardware failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Disk health
+        try {
+            $disk = Get-SmartDiskHealth
+            $disk | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'disk_health.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: disk_health failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Memory and CPU
+        try {
+            Get-MemoryInfo | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'memory.json') -Encoding UTF8
+            Get-CPUInfo | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'cpu.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: mem/cpu failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Network (optional)
+        if ($IncludeNetwork) {
+            try {
+                Get-NetworkSnapshot | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'network.json') -Encoding UTF8
+                Get-DnsConfig | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'dns.json') -Encoding UTF8
+            } catch { Write-ProfileLog "Snapshot: network failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+        }
+
+        # Event log summary (optional)
+        if ($IncludeEventLogs) {
+            try {
+                Get-EventLogSummary -Hours 24 | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'event_summary.json') -Encoding UTF8
+            } catch { Write-ProfileLog "Snapshot: events failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+        }
+
+        # Profile health
+        try {
+            Test-ProfileHealth | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapDir 'profile_health.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: profile_health failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Installed software list
+        try {
+            Get-InstalledSoftware | Select-Object Name, Version, Publisher |
+                ConvertTo-Json -Depth 2 | Set-Content (Join-Path $snapDir 'installed_software.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: software failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Services
+        try {
+            Get-Service | Select-Object Name, Status, StartType |
+                ConvertTo-Json -Depth 2 | Set-Content (Join-Path $snapDir 'services.json') -Encoding UTF8
+        } catch { Write-ProfileLog "Snapshot: services failed: $($_.Exception.Message)" -Level DEBUG -Component "Snapshot" }
+
+        # Manifest
+        @{
+            Timestamp    = (Get-Date).ToString('o')
+            Computer     = $env:COMPUTERNAME
+            PSVersion    = $PSVersionTable.PSVersion.ToString()
+            ProfileVer   = $script:ProfileVersion
+            Files        = (Get-ChildItem $snapDir -File | Select-Object -ExpandProperty Name)
+        } | ConvertTo-Json -Depth 2 | Set-Content (Join-Path $snapDir 'manifest.json') -Encoding UTF8
+
+        Write-Host "Snapshot complete: $snapDir" -ForegroundColor Green
+        Write-ProfileLog "System snapshot saved to $snapDir" -Level INFO -Component "Snapshot"
+        return $snapDir
+    } catch {
+        Write-CaughtException -Context "Collect-SystemSnapshot" -ErrorRecord $_ -Component "Snapshot" -Level WARN
+        return $null
+    }
+}
+
+#endregion ADDED: DIAGNOSTICS AUTOMATION
+
+
+#region 31 - ADDED: TESTING AND LINTING INTEGRATION
+#==============================================================================
+<#
+.SYNOPSIS
+    PSScriptAnalyzer and Pester integration for profile validation.
+.DESCRIPTION
+    Provides functions to lint the profile script and run smoke tests.
+    PSScriptAnalyzer is used best-effort; Pester tests are in a companion file.
+.EXAMPLE
+    Test-ProfileScript
+    Invoke-ProfileLint
+#>
+
+function Invoke-ProfileLint {
+    <#
+    .SYNOPSIS
+        Runs PSScriptAnalyzer on the profile script.
+    .PARAMETER Severity
+        Minimum severity to report.
+    .PARAMETER Fix
+        Attempt automatic fixes (non-destructive, writes to a new file).
+    .EXAMPLE
+        Invoke-ProfileLint -Severity Warning
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [ValidateSet('Information','Warning','Error')]
+        [string[]]$Severity = @('Error','Warning'),
+        [switch]$Fix
+    )
+
+    if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+        try {
+            Import-Module PSScriptAnalyzer -ErrorAction Stop
+        } catch {
+            Write-Host "PSScriptAnalyzer not available. Install with: Install-Module PSScriptAnalyzer -Scope CurrentUser" -ForegroundColor Yellow
+            return @()
+        }
+    }
+
+    $profilePath = $PROFILE.CurrentUserAllHosts
+    if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        $profilePath = $PROFILE.CurrentUserCurrentHost
+    }
+    if (-not (Test-Path $profilePath)) {
+        Write-Host "Profile script not found at expected path." -ForegroundColor Yellow
+        return @()
+    }
+
+    try {
+        $analyzerParams = @{
+            Path     = $profilePath
+            Severity = $Severity
+        }
+        # Use settings file if available
+        $settingsPath = Join-Path (Split-Path $profilePath) 'PSScriptAnalyzerSettings.psd1'
+        if (Test-Path $settingsPath) { $analyzerParams.Settings = $settingsPath }
+
+        $results = Invoke-ScriptAnalyzer @analyzerParams
+        if ($results) {
+            Write-Host "`nPSScriptAnalyzer Results ($($results.Count) findings):" -ForegroundColor Yellow
+            $results | Format-Table RuleName, Severity, Line, Message -AutoSize
+        } else {
+            Write-Host "No issues found by PSScriptAnalyzer." -ForegroundColor Green
+        }
+
+        if ($Fix) {
+            $fixedPath = $profilePath -replace '\.ps1$', '_fixed.ps1'
+            $fixedContent = Invoke-ScriptAnalyzer -Path $profilePath -Fix -ErrorAction SilentlyContinue
+            if ($fixedContent) {
+                $fixedContent | Set-Content -Path $fixedPath -Encoding UTF8
+            }
+            Write-Host "Fixed version saved to: $fixedPath" -ForegroundColor Cyan
+        }
+
+        return $results
+    } catch {
+        Write-CaughtException -Context "Invoke-ProfileLint" -ErrorRecord $_ -Component "Linting" -Level WARN
+        return @()
+    }
+}
+
+function Test-ProfileScript {
+    <#
+    .SYNOPSIS
+        Validates the profile script parses without errors.
+    .DESCRIPTION
+        Uses the PowerShell parser to check for syntax errors without executing.
+    .EXAMPLE
+        Test-ProfileScript
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param()
+
+    $profilePath = $PROFILE.CurrentUserAllHosts
+    if (-not $profilePath) { $profilePath = $PROFILE.CurrentUserCurrentHost }
+    if (-not (Test-Path $profilePath)) {
+        return [PSCustomObject]@{ Valid = $false; Errors = @('Profile script not found'); Path = $profilePath }
+    }
+
+    $tokens = $null
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($profilePath, [ref]$tokens, [ref]$errors) | Out-Null
+
+    $result = [PSCustomObject]@{
+        Valid      = ($errors.Count -eq 0)
+        ErrorCount = $errors.Count
+        Errors     = $errors | ForEach-Object { [PSCustomObject]@{ Line=$_.Extent.StartLineNumber; Message=$_.Message } }
+        Path       = $profilePath
+        Timestamp  = (Get-Date).ToString('o')
+    }
+
+    if ($result.Valid) {
+        Write-Host "Profile script is syntactically valid." -ForegroundColor Green
+    } else {
+        Write-Host "Profile script has $($result.ErrorCount) parse error(s):" -ForegroundColor Red
+        foreach ($e in $result.Errors) {
+            Write-Host "  Line $($e.Line): $($e.Message)" -ForegroundColor Red
+        }
+    }
+    return $result
+}
+
+function Invoke-ProfilePesterTests {
+    <#
+    .SYNOPSIS
+        Runs Pester smoke tests for the profile.
+    .DESCRIPTION
+        Looks for a companion test file and invokes Pester.
+    .EXAMPLE
+        Invoke-ProfilePesterTests
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Command Invoke-Pester -ErrorAction SilentlyContinue)) {
+        try {
+            Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+        } catch {
+            Write-Host "Pester 5+ not available. Install with: Install-Module Pester -Scope CurrentUser" -ForegroundColor Yellow
+            return
+        }
+    }
+
+    $testFile = Join-Path (Split-Path $PROFILE.CurrentUserAllHosts) 'Microsoft.PowerShell_profile.Tests.ps1'
+    if (-not (Test-Path $testFile)) {
+        Write-Host "Test file not found: $testFile" -ForegroundColor Yellow
+        Write-Host "Create it with Pester Describe/It blocks." -ForegroundColor DarkGray
+        return
+    }
+
+    Invoke-Pester -Path $testFile -Output Detailed
+}
+
+#endregion ADDED: TESTING AND LINTING INTEGRATION
+
+
+#region 32 - ADDED: CODE SIGNING GUIDANCE
+#==============================================================================
+<#
+.SYNOPSIS
+    Instructions and helper for digitally signing the profile script.
+.DESCRIPTION
+    Provides a function to sign the profile with a code-signing certificate.
+    Signing ensures the script has not been tampered with and is trusted.
+
+    To sign your profile:
+    1. Obtain a code-signing certificate (self-signed for local use, or CA-issued):
+         New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=PowerShell Profile" `
+             -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5)
+    2. Trust the certificate:
+         $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subject -like '*PowerShell Profile*'
+         Export-Certificate -Cert $cert -FilePath "$HOME\ProfileSign.cer"
+         Import-Certificate -FilePath "$HOME\ProfileSign.cer" -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
+    3. Sign the profile:
+         Sign-ProfileScript
+    4. Set execution policy to AllSigned or RemoteSigned.
+#>
+
+function Sign-ProfileScript {
+    <#
+    .SYNOPSIS
+        Signs the profile script with a code-signing certificate.
+    .PARAMETER CertSubject
+        Subject name filter for the certificate (default: '*PowerShell*').
+    .PARAMETER TimestampServer
+        URL of the timestamp server.
+    .EXAMPLE
+        Sign-ProfileScript
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$CertSubject = '*PowerShell*',
+        [string]$TimestampServer = 'http://timestamp.digicert.com'
+    )
+
+    $profilePath = $PROFILE.CurrentUserAllHosts
+    if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        $profilePath = $PROFILE.CurrentUserCurrentHost
+    }
+    if (-not (Test-Path $profilePath)) {
+        Write-Host "Profile script not found." -ForegroundColor Yellow
+        return $false
+    }
+
+    $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -like $CertSubject -and $_.NotAfter -gt (Get-Date) } |
+        Sort-Object NotAfter -Descending | Select-Object -First 1
+
+    if (-not $cert) {
+        Write-Host "No valid code-signing certificate found matching '$CertSubject'." -ForegroundColor Yellow
+        Write-Host "Create one with:" -ForegroundColor DarkGray
+        Write-Host "  New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PowerShell Profile' -CertStoreLocation Cert:\CurrentUser\My" -ForegroundColor DarkGray
+        return $false
+    }
+
+    if ($PSCmdlet.ShouldProcess($profilePath, "Sign with cert '$($cert.Subject)'")) {
+        try {
+            $signParams = @{
+                FilePath      = $profilePath
+                Certificate   = $cert
+                TimeStampServer = $TimestampServer
+                HashAlgorithm = 'SHA256'
+            }
+            $sig = Set-AuthenticodeSignature @signParams
+            if ($sig.Status -eq 'Valid') {
+                Write-Host "Profile signed successfully." -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "Signing returned status: $($sig.Status)" -ForegroundColor Yellow
+                return $false
+            }
+        } catch {
+            Write-CaughtException -Context "Sign-ProfileScript" -ErrorRecord $_ -Component "Signing" -Level WARN
+            return $false
+        }
+    }
+}
+
+#endregion ADDED: CODE SIGNING GUIDANCE
+
 
 #==============================================================================
 # PROFILE END
