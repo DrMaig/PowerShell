@@ -13,9 +13,9 @@
       <S N="Author">Brandon Olin</S>
       <S N="CompanyName">devblackops</S>
       <S N="Copyright">(c) Brandon Olin. All rights reserved.</S>
-      <DT N="PublishedDate">2023-07-06T04:55:30-07:00</DT>
+      <DT N="PublishedDate">2023-07-06T04:55:30+05:00</DT>
       <Obj N="InstalledDate" RefId="1">
-        <DT>2026-02-17T11:57:13.1816366-08:00</DT>
+        <DT>2026-02-18T00:57:13.1816366+05:00</DT>
         <MS>
           <Obj N="DisplayHint" RefId="2">
             <TN RefId="1">
@@ -30,7 +30,7 @@
         </MS>
       </Obj>
       <Obj N="UpdatedDate" RefId="3">
-        <DT>2026-02-17T22:34:16.5762583-08:00</DT>
+        <DT>2026-02-25T12:50:37.4540217+05:00</DT>
         <MS>
           <Obj N="DisplayHint" RefId="4">
             <TN RefId="2">
@@ -69,8 +69,23 @@
         </TN>
         <DCT>
           <En>
-            <S N="Key">Function</S>
+            <S N="Key">Workflow</S>
             <Obj N="Value" RefId="7">
+              <TNRef RefId="3" />
+              <LST />
+            </Obj>
+          </En>
+          <En>
+            <S N="Key">RoleCapability</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Cmdlet</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Function</S>
+            <Obj N="Value" RefId="8">
               <TNRef RefId="3" />
               <LST>
                 <S>Add-TerminalIconsColorTheme</S>
@@ -86,13 +101,6 @@
                 <S>Set-TerminalIconsTheme</S>
                 <S>Show-TerminalIconsTheme</S>
               </LST>
-            </Obj>
-          </En>
-          <En>
-            <S N="Key">Cmdlet</S>
-            <Obj N="Value" RefId="8">
-              <TNRef RefId="3" />
-              <LST />
             </Obj>
           </En>
           <En>
@@ -117,15 +125,7 @@
           </En>
           <En>
             <S N="Key">DscResource</S>
-            <Ref N="Value" RefId="8" />
-          </En>
-          <En>
-            <S N="Key">RoleCapability</S>
-            <Ref N="Value" RefId="8" />
-          </En>
-          <En>
-            <S N="Key">Workflow</S>
-            <Ref N="Value" RefId="8" />
+            <Ref N="Value" RefId="7" />
           </En>
         </DCT>
       </Obj>
@@ -150,15 +150,15 @@
           <S N="releaseNotes">https://raw.githubusercontent.com/devblackops/Terminal-Icons/master/CHANGELOG.md</S>
           <S N="isLatestVersion">True</S>
           <S N="isAbsoluteLatestVersion">True</S>
-          <S N="versionDownloadCount">6460823</S>
-          <S N="downloadCount">6711212</S>
+          <S N="versionDownloadCount">6467703</S>
+          <S N="downloadCount">6718120</S>
           <S N="packageSize">127437</S>
-          <S N="published">7/6/2023 4:55:30 AM -07:00</S>
-          <S N="created">7/6/2023 4:55:30 AM -07:00</S>
-          <S N="lastUpdated">2/18/2026 6:30:00 AM -08:00</S>
+          <S N="published">7/6/2023 4:55:30 AM +05:00</S>
+          <S N="created">7/6/2023 4:55:30 AM +05:00</S>
+          <S N="lastUpdated">2/24/2026 9:40:10 PM +05:00</S>
           <S N="tags">Color Terminal Console NerdFonts Icon PSModule PSFunction_Add-TerminalIconsColorTheme PSCommand_Add-TerminalIconsColorTheme PSFunction_Add-TerminalIconsIconTheme PSCommand_Add-TerminalIconsIconTheme PSFunction_Format-TerminalIcons PSCommand_Format-TerminalIcons PSFunction_Get-TerminalIconsColorTheme PSCommand_Get-TerminalIconsColorTheme PSFunction_Get-TerminalIconsGlyphs PSCommand_Get-TerminalIconsGlyphs PSFunction_Get-TerminalIconsIconTheme PSCommand_Get-TerminalIconsIconTheme PSFunction_Get-TerminalIconsTheme PSCommand_Get-TerminalIconsTheme PSFunction_Invoke-TerminalIconsThemeMigration PSCommand_Invoke-TerminalIconsThemeMigration PSFunction_Remove-TerminalIconsTheme PSCommand_Remove-TerminalIconsTheme PSFunction_Set-TerminalIconsIcon PSCommand_Set-TerminalIconsIcon PSFunction_Set-TerminalIconsTheme PSCommand_Set-TerminalIconsTheme PSFunction_Show-TerminalIconsTheme PSCommand_Show-TerminalIconsTheme PSIncludes_Function</S>
           <S N="developmentDependency">False</S>
-          <S N="updated">2026-02-18T06:30:00Z</S>
+          <S N="updated">2026-02-24T21:40:10Z</S>
           <S N="NormalizedVersion">0.11.0</S>
           <S N="Authors">Brandon Olin</S>
           <S N="IsPrerelease">false</S>

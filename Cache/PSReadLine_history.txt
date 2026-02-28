@@ -1,0 +1,242 @@
+get-error -verbose
+get-command -CommandType function -listimported *
+updatemods
+Start-DeferredModuleLoader
+Show-ProfileDiagnostics
+Repair-Profile
+get-command -CommandType function -listimported *
+ Update-ProfileModules
+Update-InstalledModulesCache
+Update-AllBranches
+Update-HelpProfile
+get-error -verbose
+repair
+diag
+helpme
+optimize
+get-command -CommandType function -listimported *
+Optimize-System
+get-command -CommandType function -listimported *
+Register-ToolCompletion
+Update-AllPackages
+python.exe -m pip install --upgrade pip
+irm https://code.kimi.com/install.ps1 | iex
+kimi
+get-command -CommandType function -listimported *
+choco upgrade all -y
+scoop update
+pip install pipx
+python -m pipx ensurepath
+python -m pipx ensurepath --force
+python -m pipx install git+https://github.com/Pennyw0rth/NetExec
+pipx completions
+pip install argcomplete
+activate-global-python-argcomplete
+cd
+pip install osmnx
+pip install agentpy
+choco install networkmanager
+Install-Package DnsClient
+iwr -useb https://git.io/debloat|iex
+irm "https://winscript.cc/irm" | iex
+winget install --id 9PDH8M7HF2SQ
+ngrok http 80
+ipconfig /flushdns
+ngrok http 80
+ngrok config check
+scoop install ngrok
+scoop update ngrok
+scoop update
+ngrok config check
+ngrok config check
+ngrok config edit
+ngrok http 80 --url https://default.internal
+ngrok http --url=supereligibly-unridiculous-marylou.ngrok-free.dev 80
+ngrok http 80 --url https://default.internal
+ngrok config edit
+ngrok start your_endpoint_name
+ngrok start --all
+ngrok http --url=supereligibly-unridiculous-marylou.ngrok-free.dev 80
+ngrok http --url=supereligibly-unridiculous-marylou.ngrok-free.dev 80 --pooling-enabled
+ssh -R 443:localhost:80 v2@connect.ngrok-agent.com http
+ssh -r
+ngrok service install --config /etc/ngrok.yml
+ngrok service start
+mkdir hello-ngrok && cd hello-ngrok
+npm init -y && npm install @ngrok/ngrok
+touch index.js
+notepad index.js
+touch index.js
+node index.js
+notepad index.js
+node index.js
+notepad C:\Users\maig3\AppData\Local/ngrok/ngrok.yml
+cd hello-ngrok
+touch service.js
+notepad service.js
+ngrok start cli-quickstart
+scoop uninstall ngrok
+choco install WinPaletter
+choco install nodejs --version="25.7.0"
+ipconfig /flushdns
+ipconfig /release
+ipconfig /renew
+ipconfig /flushdns
+get-command -CommandType function -listimported *
+topcpu
+Stop-ProcessByName
+topcpu
+Optimize-System
+Optimize-System 
+Optimize
+updateall
+scoop install oh-my-posh
+scoop update oh-my-posh
+get-command -CommandType function -listimported *
+updateall
+exit
+diag
+get-command -CommandType function -listimported *
+repair
+scoop install oh-my-posh
+scoop update oh-my-posh
+scoop status
+Clear-TempFiles
+irm https://coporton.com/ias | iex
+invoke-restmethod 'https://coporton.com/ias' | invoke-expression
+irm https://coporton.com/ias | iex
+ls
+. IASL.cmd
+. 'IASL.cmd'
+.\IASL.cmd
+irm https://coporton.com/ias | iex
+scoop uninstall oh-my-posh
+scoop update *
+scoop install 7zip
+go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+Install-DevPackage -Manager dotnet
+Install-DevPackage -Manager scoop
+go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+scoop install oh-my-posh
+scoop install sudo
+sudo scoop install 7zip git openssh --global
+scoop install aria2 curl grep sed less touch
+scoop install python ruby go perl
+diag
+get-command -CommandType function -listimported *
+nmap
+scoop install nmap
+scoop uninstall nmap
+pip install argcomplete
+python.exe -m pip install --upgrade pip
+python -m pipx ensurepath
+python.exe -m pip install pipx
+python -m pipx ensurepath
+pipx completions
+pipx install argcomplete
+activate-global-python-argcomplete.exe
+scoop install nmap
+nmap
+scoop uninstall nmap
+scoop update *
+scoop cleanup
+scoop cleanup *
+scoop install displaycal
+ipconfig /flushdns
+ipconfig /release
+ipconfig /renew
+ipconfig /flushdns
+repair
+Start-DeferredModuleLoader
+dism /oneline /cleanup-image /startcomponentcleanup /resetbase
+Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase
+sfc /scannow
+Dism.exe /online /Cleanup-Image /restorehealth
+sfc /scannow
+ipconfig /flushdns\
+ipconfig /flushdns
+ipconfig /release
+ipconfig /renew
+ipconfig /flushdns
+ipconfig /release
+ipconfig /renew
+ipconfig /flushdns
+Dism.exe /online /Cleanup-Image /restorehealth
+sfc /scannow
+sfc /scannow`
+Dism.exe /online /Cleanup-Image /restorehealth`
+sfc /scannow
+sfc /scannow`
+Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase`
+dism /online /cleanup-image /restorehealth
+scoop install fastfetch
+fastfetch
+scoop install nmap
+nmap
+sudo nmap -sn 192.168.1.0/24 -oG - | awk '/Up$/{print $2}' > live_hosts.txt
+sudo nmap -sS -sV -O -A -iL live_hosts.txt -oA detailed_scan
+sudo nmap -sS -sV -O -p- --script "default and safe" -oA audit_results 192.168.1.0/24
+nmap -sS -sV -O -p- --script "default and safe" -oA audit_results 192.168.1.0/24
+sudo nmap -sS -sV -O -A -p- 192.168.1.1
+nmap -sS -sV -O -A -p- 192.168.1.1
+nmap --script vuln 192.168.1.1
+nmap --script "http-vuln-*" -p80,443 192.168.1.1
+nmap --script "http-vuln" -p80,443 192.168.1.1
+nmap --script "http-vuln-*" -p 80,443 192.168.1.1
+nmap --script ssl-heartbleed -p 443 192.168.1.1
+nmap --script vuln 192.168.1.1
+nmap --script-updatedb
+nmap -sC 192.168.1.1
+pip
+cd
+pip install -U openvino
+python.exe -m pip install --upgrade pip
+python.exe -m pip install --upgrade pip wheel setuptools
+pip install nncf tensorflow
+pip install nncf
+pip install tensorflow
+pip install --upgrade tensorflow-graphics
+pip install pytorch
+pip install asyncio
+pip install ansible
+pip install cpython
+pip install pypy
+ls
+cd VC
+ls
+cd
+pip install --upgrade tensorflow-graphics
+conda
+conda install
+conda init
+conda check
+conda doctor
+conda update
+conda update conda
+conda config --add channels conda-forge
+conda env
+conda env list
+conda create pydev
+conda create -n pydev
+conda activate pydev
+conda install tensorflow-graphics
+conda install pypy
+conda install scipy
+conda env list
+conda update --all
+conda config --show
+conda install conda-build
+conda index
+conda install bottleneck
+conda config --set prefix_data_interoperability True
+pip install -U pytest
+pytorch
+pip install pytorch
+conda activate pydev
+conda install pytorch
+conda activate scikit-learn
+conda install lightfm
+conda install scikit-learn
+conda install django
+get-command -CommandType function -listimported *
+updateall

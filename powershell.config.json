@@ -1,1 +1,13 @@
-{"Microsoft.PowerShell:ExecutionPolicy":"RemoteSigned"}
+{
+    "Microsoft.PowerShell:ExecutionPolicy":"RemoteSigned",
+    "User":{"Name":"maig3","Editor":"code"},
+    "StartupMode":"full",
+    "LoggingEnabled":true,
+    "Features":{"UsePSReadLine":true,"UseOhMyPosh":true},
+    "Modules":{
+        "ImportOnStartup":[
+            "Microsoft.PowerShell.PSReadLine",
+            "Oh-my-posh"
+        ]
+    }
+}

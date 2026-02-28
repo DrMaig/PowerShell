@@ -13,12 +13,27 @@
       <S N="Author">Michael Kelley</S>
       <S N="CompanyName">MichaelKelley</S>
       <S N="Copyright">(c) 2020. All rights reserved.</S>
-      <DT N="PublishedDate">2025-12-17T04:21:52-08:00</DT>
+      <DT N="PublishedDate">2025-12-17T04:21:52+05:00</DT>
       <Obj N="InstalledDate" RefId="1">
-        <DT>2026-02-17T11:55:40.0919781-08:00</DT>
+        <DT>2026-02-18T00:55:40.0919781+05:00</DT>
         <MS>
           <Obj N="DisplayHint" RefId="2">
             <TN RefId="1">
+              <T>Deserialized.Microsoft.PowerShell.Commands.DisplayHintType</T>
+              <T>Deserialized.System.Enum</T>
+              <T>Deserialized.System.ValueType</T>
+              <T>Deserialized.System.Object</T>
+            </TN>
+            <ToString>DateTime</ToString>
+            <I32>2</I32>
+          </Obj>
+        </MS>
+      </Obj>
+      <Obj N="UpdatedDate" RefId="3">
+        <DT>2026-02-25T12:49:54.0686215+05:00</DT>
+        <MS>
+          <Obj N="DisplayHint" RefId="4">
+            <TN RefId="2">
               <T>Microsoft.PowerShell.Commands.DisplayHintType</T>
               <T>System.Enum</T>
               <T>System.ValueType</T>
@@ -29,12 +44,11 @@
           </Obj>
         </MS>
       </Obj>
-      <Nil N="UpdatedDate" />
       <Nil N="LicenseUri" />
       <Nil N="ProjectUri" />
       <Nil N="IconUri" />
-      <Obj N="Tags" RefId="3">
-        <TN RefId="2">
+      <Obj N="Tags" RefId="5">
+        <TN RefId="3">
           <T>System.Object[]</T>
           <T>System.Array</T>
           <T>System.Object</T>
@@ -43,16 +57,62 @@
           <S>PSModule</S>
         </LST>
       </Obj>
-      <Obj N="Includes" RefId="4">
-        <TN RefId="3">
+      <Obj N="Includes" RefId="6">
+        <TN RefId="4">
           <T>System.Collections.Hashtable</T>
           <T>System.Object</T>
         </TN>
         <DCT>
           <En>
+            <S N="Key">Workflow</S>
+            <Obj N="Value" RefId="7">
+              <TNRef RefId="3" />
+              <LST />
+            </Obj>
+          </En>
+          <En>
+            <S N="Key">RoleCapability</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Cmdlet</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Function</S>
+            <Obj N="Value" RefId="8">
+              <TNRef RefId="3" />
+              <LST>
+                <S>Enable-PsFzfAliases</S>
+                <S>Invoke-FzfPsReadlineHandlerProvider</S>
+                <S>Invoke-FzfPsReadlineHandlerHistory</S>
+                <S>Invoke-FzfPsReadlineHandlerSetLocation</S>
+                <S>Invoke-FzfPsReadlineHandlerHistoryArgs</S>
+                <S>Invoke-FuzzyEdit</S>
+                <S>Invoke-FuzzyFasd</S>
+                <S>Invoke-FuzzyGitStatus</S>
+                <S>Invoke-FuzzyHistory</S>
+                <S>Invoke-FuzzyKillProcess</S>
+                <S>Invoke-FuzzyScoop</S>
+                <S>Invoke-FuzzySetLocation</S>
+                <S>Invoke-FuzzyZLocation</S>
+                <S>Invoke-Fzf</S>
+                <S>Invoke-FzfTabCompletion</S>
+                <S>Invoke-PsFzfGitBranches</S>
+                <S>Invoke-PsFzfGitFiles</S>
+                <S>Invoke-PsFzfGitHashes</S>
+                <S>Invoke-PsFzfGitStashes</S>
+                <S>Invoke-PsFzfGitTags</S>
+                <S>Invoke-PsFzfRipgrep</S>
+                <S>Set-LocationFuzzyEverything</S>
+                <S>Set-PsFzfOption</S>
+              </LST>
+            </Obj>
+          </En>
+          <En>
             <S N="Key">Command</S>
-            <Obj N="Value" RefId="5">
-              <TNRef RefId="2" />
+            <Obj N="Value" RefId="9">
+              <TNRef RefId="3" />
               <LST>
                 <S>Enable-PsFzfAliases</S>
                 <S>Invoke-FzfPsReadlineHandlerProvider</S>
@@ -82,67 +142,21 @@
           </En>
           <En>
             <S N="Key">DscResource</S>
-            <Obj N="Value" RefId="6">
-              <TNRef RefId="2" />
-              <LST />
-            </Obj>
-          </En>
-          <En>
-            <S N="Key">RoleCapability</S>
-            <Ref N="Value" RefId="6" />
-          </En>
-          <En>
-            <S N="Key">Cmdlet</S>
-            <Ref N="Value" RefId="6" />
-          </En>
-          <En>
-            <S N="Key">Workflow</S>
-            <Ref N="Value" RefId="6" />
-          </En>
-          <En>
-            <S N="Key">Function</S>
-            <Obj N="Value" RefId="7">
-              <TNRef RefId="2" />
-              <LST>
-                <S>Enable-PsFzfAliases</S>
-                <S>Invoke-FzfPsReadlineHandlerProvider</S>
-                <S>Invoke-FzfPsReadlineHandlerHistory</S>
-                <S>Invoke-FzfPsReadlineHandlerSetLocation</S>
-                <S>Invoke-FzfPsReadlineHandlerHistoryArgs</S>
-                <S>Invoke-FuzzyEdit</S>
-                <S>Invoke-FuzzyFasd</S>
-                <S>Invoke-FuzzyGitStatus</S>
-                <S>Invoke-FuzzyHistory</S>
-                <S>Invoke-FuzzyKillProcess</S>
-                <S>Invoke-FuzzyScoop</S>
-                <S>Invoke-FuzzySetLocation</S>
-                <S>Invoke-FuzzyZLocation</S>
-                <S>Invoke-Fzf</S>
-                <S>Invoke-FzfTabCompletion</S>
-                <S>Invoke-PsFzfGitBranches</S>
-                <S>Invoke-PsFzfGitFiles</S>
-                <S>Invoke-PsFzfGitHashes</S>
-                <S>Invoke-PsFzfGitStashes</S>
-                <S>Invoke-PsFzfGitTags</S>
-                <S>Invoke-PsFzfRipgrep</S>
-                <S>Set-LocationFuzzyEverything</S>
-                <S>Set-PsFzfOption</S>
-              </LST>
-            </Obj>
+            <Ref N="Value" RefId="7" />
           </En>
         </DCT>
       </Obj>
       <Nil N="PowerShellGetFormatVersion" />
       <Nil N="ReleaseNotes" />
-      <Obj N="Dependencies" RefId="8">
-        <TNRef RefId="2" />
+      <Obj N="Dependencies" RefId="10">
+        <TNRef RefId="3" />
         <LST />
       </Obj>
       <S N="RepositorySourceLocation">https://www.powershellgallery.com/api/v2</S>
       <S N="Repository">PSGallery</S>
       <S N="PackageManagementProvider">NuGet</S>
-      <Obj N="AdditionalMetadata" RefId="9">
-        <TN RefId="4">
+      <Obj N="AdditionalMetadata" RefId="11">
+        <TN RefId="5">
           <T>System.Management.Automation.PSCustomObject</T>
           <T>System.Object</T>
         </TN>
@@ -152,15 +166,15 @@
           <S N="requireLicenseAcceptance">False</S>
           <S N="isLatestVersion">True</S>
           <S N="isAbsoluteLatestVersion">True</S>
-          <S N="versionDownloadCount">35550</S>
-          <S N="downloadCount">919552</S>
+          <S N="versionDownloadCount">38585</S>
+          <S N="downloadCount">922600</S>
           <S N="packageSize">72949</S>
-          <S N="published">12/17/2025 4:21:52 AM -08:00</S>
-          <S N="created">12/17/2025 4:21:52 AM -08:00</S>
-          <S N="lastUpdated">2/17/2026 7:50:00 PM -08:00</S>
+          <S N="published">12/17/2025 4:21:52 AM +05:00</S>
+          <S N="created">12/17/2025 4:21:52 AM +05:00</S>
+          <S N="lastUpdated">2/24/2026 9:40:10 PM +05:00</S>
           <S N="tags">PSModule PSFunction_Enable-PsFzfAliases PSCommand_Enable-PsFzfAliases PSFunction_Invoke-FzfPsReadlineHandlerProvider PSCommand_Invoke-FzfPsReadlineHandlerProvider PSFunction_Invoke-FzfPsReadlineHandlerHistory PSCommand_Invoke-FzfPsReadlineHandlerHistory PSFunction_Invoke-FzfPsReadlineHandlerSetLocation PSCommand_Invoke-FzfPsReadlineHandlerSetLocation PSFunction_Invoke-FzfPsReadlineHandlerHistoryArgs PSCommand_Invoke-FzfPsReadlineHandlerHistoryArgs PSFunction_Invoke-FuzzyEdit PSCommand_Invoke-FuzzyEdit PSFunction_Invoke-FuzzyFasd PSCommand_Invoke-FuzzyFasd PSFunction_Invoke-FuzzyGitStatus PSCommand_Invoke-FuzzyGitStatus PSFunction_Invoke-FuzzyHistory PSCommand_Invoke-FuzzyHistory PSFunction_Invoke-FuzzyKillProcess PSCommand_Invoke-FuzzyKillProcess PSFunction_Invoke-FuzzyScoop PSCommand_Invoke-FuzzyScoop PSFunction_Invoke-FuzzySetLocation PSCommand_Invoke-FuzzySetLocation PSFunction_Invoke-FuzzyZLocation PSCommand_Invoke-FuzzyZLocation PSFunction_Invoke-Fzf PSCommand_Invoke-Fzf PSFunction_Invoke-FzfTabCompletion PSCommand_Invoke-FzfTabCompletion PSFunction_Invoke-PsFzfGitBranches PSCommand_Invoke-PsFzfGitBranches PSFunction_Invoke-PsFzfGitFiles PSCommand_Invoke-PsFzfGitFiles PSFunction_Invoke-PsFzfGitHashes PSCommand_Invoke-PsFzfGitHashes PSFunction_Invoke-PsFzfGitStashes PSCommand_Invoke-PsFzfGitStashes PSFunction_Invoke-PsFzfGitTags PSCommand_Invoke-PsFzfGitTags PSFunction_Invoke-PsFzfRipgrep PSCommand_Invoke-PsFzfRipgrep PSFunction_Set-LocationFuzzyEverything PSCommand_Set-LocationFuzzyEverything PSFunction_Set-PsFzfOption PSCommand_Set-PsFzfOption PSIncludes_Function</S>
           <S N="developmentDependency">False</S>
-          <S N="updated">2026-02-17T19:50:00Z</S>
+          <S N="updated">2026-02-24T21:40:10Z</S>
           <S N="NormalizedVersion">2.7.9</S>
           <S N="Authors">Michael Kelley</S>
           <S N="IsPrerelease">false</S>

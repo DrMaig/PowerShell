@@ -1,0 +1,197 @@
+<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04">
+  <Obj RefId="0">
+    <TN RefId="0">
+      <T>Microsoft.PowerShell.Commands.PSRepositoryItemInfo</T>
+      <T>System.Management.Automation.PSCustomObject</T>
+      <T>System.Object</T>
+    </TN>
+    <MS>
+      <S N="Name">AdminToolbox.Networking</S>
+      <Version N="Version">2.25.0.4</Version>
+      <S N="Type">Module</S>
+      <S N="Description">Network Troubleshooting Functions</S>
+      <S N="Author">Taylor Lee</S>
+      <S N="CompanyName">TaylorLee</S>
+      <S N="Copyright">(c) Taylor Lee. All rights reserved.</S>
+      <DT N="PublishedDate">2026-02-24T03:49:58+05:00</DT>
+      <Obj N="InstalledDate" RefId="1">
+        <DT>2026-02-20T02:08:19.6280727+05:00</DT>
+        <MS>
+          <Obj N="DisplayHint" RefId="2">
+            <TN RefId="1">
+              <T>Deserialized.Microsoft.PowerShell.Commands.DisplayHintType</T>
+              <T>Deserialized.System.Enum</T>
+              <T>Deserialized.System.ValueType</T>
+              <T>Deserialized.System.Object</T>
+            </TN>
+            <ToString>DateTime</ToString>
+            <I32>2</I32>
+          </Obj>
+        </MS>
+      </Obj>
+      <Obj N="UpdatedDate" RefId="3">
+        <DT>2026-02-25T12:49:34.9051871+05:00</DT>
+        <MS>
+          <Obj N="DisplayHint" RefId="4">
+            <TN RefId="2">
+              <T>Microsoft.PowerShell.Commands.DisplayHintType</T>
+              <T>System.Enum</T>
+              <T>System.ValueType</T>
+              <T>System.Object</T>
+            </TN>
+            <ToString>DateTime</ToString>
+            <I32>2</I32>
+          </Obj>
+        </MS>
+      </Obj>
+      <URI N="LicenseUri">https://github.com/TheTaylorLee/AdminToolbox/blob/main/LICENSE.txt</URI>
+      <URI N="ProjectUri">https://github.com/TheTaylorLee/AdminToolbox/</URI>
+      <URI N="IconUri">https://raw.githubusercontent.com/TheTaylorLee/AdminToolbox/main/images/toolboxShell2.png</URI>
+      <Obj N="Tags" RefId="5">
+        <TN RefId="3">
+          <T>System.Object[]</T>
+          <T>System.Array</T>
+          <T>System.Object</T>
+        </TN>
+        <LST>
+          <S>ARP</S>
+          <S>CIDR</S>
+          <S>ethr</S>
+          <S>iperf</S>
+          <S>MAC</S>
+          <S>Network</S>
+          <S>Networking</S>
+          <S>NetworkScan</S>
+          <S>OUI</S>
+          <S>Scanning</S>
+          <S>Subnet</S>
+          <S>Subnetting</S>
+          <S>Whois</S>
+          <S>PSModule</S>
+          <S>PSEdition_Desktop</S>
+          <S>PSEdition_Core</S>
+        </LST>
+      </Obj>
+      <Obj N="Includes" RefId="6">
+        <TN RefId="4">
+          <T>System.Collections.Hashtable</T>
+          <T>System.Object</T>
+        </TN>
+        <DCT>
+          <En>
+            <S N="Key">Workflow</S>
+            <Obj N="Value" RefId="7">
+              <TNRef RefId="3" />
+              <LST />
+            </Obj>
+          </En>
+          <En>
+            <S N="Key">RoleCapability</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Cmdlet</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+          <En>
+            <S N="Key">Function</S>
+            <Obj N="Value" RefId="8">
+              <TNRef RefId="3" />
+              <LST>
+                <S>Get-Networking</S>
+                <S>Clear-Arp</S>
+                <S>Get-NetworkStatistics</S>
+                <S>Get-PublicIP</S>
+                <S>Get-MacVendor</S>
+                <S>Invoke-NetworkScan</S>
+                <S>Reset-NetworkAdapter</S>
+                <S>Reset-NetworkStack</S>
+                <S>Invoke-Iperf</S>
+                <S>Start-SpeedTest</S>
+                <S>Get-Whois</S>
+                <S>Invoke-Monitor</S>
+                <S>Show-IPInfo</S>
+                <S>Invoke-Ethr</S>
+                <S>Invoke-PSIPcalc</S>
+                <S>Get-NICConfig</S>
+                <S>Get-SpeedTestCLI</S>
+                <S>Open-HostsFile</S>
+              </LST>
+            </Obj>
+          </En>
+          <En>
+            <S N="Key">Command</S>
+            <Obj N="Value" RefId="9">
+              <TNRef RefId="3" />
+              <LST>
+                <S>Get-Networking</S>
+                <S>Clear-Arp</S>
+                <S>Get-NetworkStatistics</S>
+                <S>Get-PublicIP</S>
+                <S>Get-MacVendor</S>
+                <S>Invoke-NetworkScan</S>
+                <S>Reset-NetworkAdapter</S>
+                <S>Reset-NetworkStack</S>
+                <S>Invoke-Iperf</S>
+                <S>Start-SpeedTest</S>
+                <S>Get-Whois</S>
+                <S>Invoke-Monitor</S>
+                <S>Show-IPInfo</S>
+                <S>Invoke-Ethr</S>
+                <S>Invoke-PSIPcalc</S>
+                <S>Get-NICConfig</S>
+                <S>Get-SpeedTestCLI</S>
+                <S>Open-HostsFile</S>
+              </LST>
+            </Obj>
+          </En>
+          <En>
+            <S N="Key">DscResource</S>
+            <Ref N="Value" RefId="7" />
+          </En>
+        </DCT>
+      </Obj>
+      <Nil N="PowerShellGetFormatVersion" />
+      <S N="ReleaseNotes">Dependency module for the Module AdminToolbox. Full ChangeLog contained in bundled ChangeLog.txt</S>
+      <Obj N="Dependencies" RefId="10">
+        <TNRef RefId="3" />
+        <LST />
+      </Obj>
+      <S N="RepositorySourceLocation">https://www.powershellgallery.com/api/v2</S>
+      <S N="Repository">PSGallery</S>
+      <S N="PackageManagementProvider">NuGet</S>
+      <Obj N="AdditionalMetadata" RefId="11">
+        <TN RefId="5">
+          <T>System.Management.Automation.PSCustomObject</T>
+          <T>System.Object</T>
+        </TN>
+        <MS>
+          <S N="copyright">(c) Taylor Lee. All rights reserved.</S>
+          <S N="description">Network Troubleshooting Functions</S>
+          <S N="requireLicenseAcceptance">False</S>
+          <S N="releaseNotes">Dependency module for the Module AdminToolbox. Full ChangeLog contained in bundled ChangeLog.txt</S>
+          <S N="isLatestVersion">True</S>
+          <S N="isAbsoluteLatestVersion">True</S>
+          <S N="versionDownloadCount">216</S>
+          <S N="downloadCount">383105</S>
+          <S N="packageSize">5305265</S>
+          <S N="published">2/24/2026 3:49:58 AM +05:00</S>
+          <S N="created">2/24/2026 3:49:58 AM +05:00</S>
+          <S N="lastUpdated">2/24/2026 9:10:18 PM +05:00</S>
+          <S N="tags">ARP CIDR ethr iperf MAC Network Networking NetworkScan OUI Scanning Subnet Subnetting Whois PSModule PSEdition_Desktop PSEdition_Core PSFunction_Get-Networking PSCommand_Get-Networking PSFunction_Clear-Arp PSCommand_Clear-Arp PSFunction_Get-NetworkStatistics PSCommand_Get-NetworkStatistics PSFunction_Get-PublicIP PSCommand_Get-PublicIP PSFunction_Get-MacVendor PSCommand_Get-MacVendor PSFunction_Invoke-NetworkScan PSCommand_Invoke-NetworkScan PSFunction_Reset-NetworkAdapter PSCommand_Reset-NetworkAdapter PSFunction_Reset-NetworkStack PSCommand_Reset-NetworkStack PSFunction_Invoke-Iperf PSCommand_Invoke-Iperf PSFunction_Start-SpeedTest PSCommand_Start-SpeedTest PSFunction_Get-Whois PSCommand_Get-Whois PSFunction_Invoke-Monitor PSCommand_Invoke-Monitor PSFunction_Show-IPInfo PSCommand_Show-IPInfo PSFunction_Invoke-Ethr PSCommand_Invoke-Ethr PSFunction_Invoke-PSIPcalc PSCommand_Invoke-PSIPcalc PSFunction_Get-NICConfig PSCommand_Get-NICConfig PSFunction_Get-SpeedTestCLI PSCommand_Get-SpeedTestCLI PSFunction_Open-HostsFile PSCommand_Open-HostsFile PSIncludes_Function</S>
+          <S N="developmentDependency">False</S>
+          <S N="updated">2026-02-24T21:10:18Z</S>
+          <S N="NormalizedVersion">2.25.0.4</S>
+          <S N="Authors">Taylor Lee</S>
+          <S N="IsPrerelease">false</S>
+          <S N="ItemType">Module</S>
+          <S N="FileList">AdminToolbox.Networking.nuspec|AdminToolbox.Networking.psd1|AdminToolbox.NetworkingManifest.psm1|ChangeLog.md|Private\Get-Elevation.ps1|Private\Get-FormattedDate.ps1|Private\Get-IntroNet.ps1|Private\Invoke-Unzip.ps1|Private\Remove-ArpCache.ps1|Private\psnmap.ps1|Public\Clear-Arp.ps1|Public\Get-MacVendor.ps1|Public\Get-NICConfig.ps1|Public\Get-NetworkStatistics.ps1|Public\Get-Networking.ps1|Public\Get-PublicIP.ps1|Public\Get-SpeedTestCLI.ps1|Public\Get-Whois.ps1|Public\Invoke-Ethr.ps1|Public\Invoke-Iperf.ps1|Public\Invoke-Monitor.ps1|Public\Invoke-NetworkScan.ps1|Public\Invoke-PSIPcalc.ps1|Public\Open-Hostsfile.ps1|Public\Reset-NetworkAdapter.ps1|Public\Reset-NetworkStack.ps1|Public\Show-IPInfo.ps1|Support\Readme.md|Support\ScanOUI-decomissioned-20221213.txt|Support\ScanOUI.txt|Support\cyggcc_s-1.dll|Support\cygwin1.dll|Support\ethr.exe|Support\iperf3.exe|build\ethr.crescendo.json|build\iperf3.crescendo.json</S>
+          <S N="GUID">627e42e0-2b2b-4784-bdbd-c25784996693</S>
+          <S N="PowerShellVersion">5.1</S>
+          <S N="CompanyName">Unknown</S>
+        </MS>
+      </Obj>
+      <S N="InstalledLocation">C:\Users\maig3\Documents\PowerShell\Modules\AdminToolbox.Networking\2.25.0.4</S>
+    </MS>
+  </Obj>
+</Objs>

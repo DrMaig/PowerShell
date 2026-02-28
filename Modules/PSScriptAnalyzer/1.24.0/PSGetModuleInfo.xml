@@ -23,9 +23,9 @@
         </LST>
       </Obj>
       <S N="Copyright">(c) Microsoft Corporation 2025. All rights reserved.</S>
-      <DT N="PublishedDate">2025-03-18T16:21:13-07:00</DT>
+      <DT N="PublishedDate">2025-03-18T16:21:13+05:00</DT>
       <Obj N="InstalledDate" RefId="2">
-        <DT>2026-02-17T22:45:58.9408382-08:00</DT>
+        <DT>2026-02-25T12:58:26.4086118+05:00</DT>
         <MS>
           <Obj N="DisplayHint" RefId="3">
             <TN RefId="2">
@@ -58,22 +58,14 @@
         </TN>
         <DCT>
           <En>
-            <S N="Key">RoleCapability</S>
+            <S N="Key">Workflow</S>
             <Obj N="Value" RefId="6">
               <TNRef RefId="1" />
               <LST />
             </Obj>
           </En>
           <En>
-            <S N="Key">Workflow</S>
-            <Ref N="Value" RefId="6" />
-          </En>
-          <En>
-            <S N="Key">Function</S>
-            <Ref N="Value" RefId="6" />
-          </En>
-          <En>
-            <S N="Key">Command</S>
+            <S N="Key">Cmdlet</S>
             <Obj N="Value" RefId="7">
               <TNRef RefId="1" />
               <LST>
@@ -84,7 +76,11 @@
             </Obj>
           </En>
           <En>
-            <S N="Key">Cmdlet</S>
+            <S N="Key">DscResource</S>
+            <Ref N="Value" RefId="6" />
+          </En>
+          <En>
+            <S N="Key">Command</S>
             <Obj N="Value" RefId="8">
               <TNRef RefId="1" />
               <LST>
@@ -95,7 +91,11 @@
             </Obj>
           </En>
           <En>
-            <S N="Key">DscResource</S>
+            <S N="Key">Function</S>
+            <Ref N="Value" RefId="6" />
+          </En>
+          <En>
+            <S N="Key">RoleCapability</S>
             <Ref N="Value" RefId="6" />
           </En>
         </DCT>
@@ -120,15 +120,15 @@
           <S N="requireLicenseAcceptance">False</S>
           <S N="isLatestVersion">True</S>
           <S N="isAbsoluteLatestVersion">True</S>
-          <S N="versionDownloadCount">3571866</S>
-          <S N="downloadCount">10570916</S>
+          <S N="versionDownloadCount">3611149</S>
+          <S N="downloadCount">10617775</S>
           <S N="packageSize">14619371</S>
-          <S N="published">3/18/2025 4:21:13 PM -07:00</S>
-          <S N="created">3/18/2025 4:21:13 PM -07:00</S>
-          <S N="lastUpdated">2/18/2026 6:40:00 AM -08:00</S>
+          <S N="published">3/18/2025 4:21:13 PM +05:00</S>
+          <S N="created">3/18/2025 4:21:13 PM +05:00</S>
+          <S N="lastUpdated">2/24/2026 9:40:10 PM +05:00</S>
           <S N="tags">lint bestpractice PSModule PSCmdlet_Get-ScriptAnalyzerRule PSCommand_Get-ScriptAnalyzerRule PSCmdlet_Invoke-ScriptAnalyzer PSCommand_Invoke-ScriptAnalyzer PSCmdlet_Invoke-Formatter PSCommand_Invoke-Formatter PSIncludes_Cmdlet</S>
           <S N="developmentDependency">False</S>
-          <S N="updated">2026-02-18T06:40:00Z</S>
+          <S N="updated">2026-02-24T21:40:10Z</S>
           <S N="NormalizedVersion">1.24.0</S>
           <S N="Authors">Microsoft Corporation</S>
           <S N="IsPrerelease">false</S>
