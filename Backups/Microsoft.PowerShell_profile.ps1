@@ -11,7 +11,6 @@
      6.  Runtime & Framework Completions
      7.  System Information & Hardware
      8.  OS Health, Repair & Optimisation
-     9.  Application & Package Management
     10.  Network Administration & Diagnostics
     11.  Security Auditing & Hardening
     12.  Event-Log & Error Analysis
