@@ -217,6 +217,10 @@ Describe 'New Enhancement Functions' {
         $script:functionNames | Should -Contain 'Test-ProfileScript'
     }
 
+    It 'Defines Test-Profile (Pester runner shortcut)' {
+        $script:functionNames | Should -Contain 'Test-Profile'
+    }
+
     # Region 32: Signing
     It 'Defines Sign-ProfileScript' {
         $script:functionNames | Should -Contain 'Sign-ProfileScript'

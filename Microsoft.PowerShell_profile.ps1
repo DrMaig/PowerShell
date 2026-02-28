@@ -5016,6 +5016,7 @@ function helpme {
     Write-Host "DNS: Use-CloudflareDns, Use-GoogleDns, Use-BestDns" -ForegroundColor Yellow
     Write-Host "Optimization: optimize, Set-PowerPlan, Invoke-DiskMaintenance" -ForegroundColor Yellow
     Write-Host "Diagnostics: diag, repair, Test-ProfileHealth" -ForegroundColor Yellow
+    Write-Host "Testing/Linting: Test-Profile (Pester), lint (PSScriptAnalyzer)" -ForegroundColor Yellow
     Write-Host "Updates: updatemods, Update-HelpProfile" -ForegroundColor Yellow
     Write-Host "Files: du, largefiles, Clear-TempFiles" -ForegroundColor Yellow
     Write-Host "Package Managers: pmstatus, updateall, Install-DevPackage" -ForegroundColor Yellow
@@ -5043,6 +5044,10 @@ function pipi { param([string]$p, [switch]$u) Install-PipPackage -Package $p -Up
 function pipu { param([string]$p = 'all') Update-PipPackage -Package $p }
 function pmstatus { Get-PackageManagerStatus | Format-Table }
 function updateall { Update-AllPackages -Manager 'all' }
+
+# Testing and linting shortcuts
+function Test-Profile { Invoke-ProfilePesterTests }  # Run Pester smoke tests
+function lint { Invoke-ProfileLint }                  # Run PSScriptAnalyzer
 
 #endregion ALIASES AND SHORTCUTS
 
@@ -6342,7 +6347,7 @@ function Show-CommandPalette {
         System     = @('Get-SystemInfo','Get-CPUInfo','Get-MemoryInfo','Get-GPUInfo','Get-BIOSInfo','Get-Uptime','Get-SystemHealth','Get-HardwareSummary','Get-SmartDiskHealth','Get-BatteryHealth')
         Network    = @('Get-LocalIP','Get-PublicIP','Get-NetworkAdapters','Get-DnsConfig','Get-NetworkSnapshot','Test-Internet','Test-TcpPort','Test-DnsResolution','Invoke-Traceroute','Get-ArpTable','Invoke-PortScan','Get-NicStatistics','Get-LinkSpeed','Set-DnsProfile','Use-BestDns','Clear-DnsCache')
         Package    = @('Get-PackageManagerStatus','Install-DevPackage','Update-AllPackages','Get-WingetPackage','Get-ChocoPackage','Get-NpmPackage','Get-PipPackage','Get-DotnetInfo')
-        Diagnostic = @('Show-ProfileDiagnostics','Test-ProfileHealth','Repair-Profile','Show-EnvironmentReport','Collect-SystemSnapshot','Test-ProfileScript')
+        Diagnostic = @('Show-ProfileDiagnostics','Test-ProfileHealth','Repair-Profile','Show-EnvironmentReport','Collect-SystemSnapshot','Test-ProfileScript','Test-Profile','Invoke-ProfileLint')
         Process    = @('Get-TopProcesses','Get-ProcessTree','Stop-ProcessByName','Get-ServiceHealth','Restart-ServiceByName','Get-ScheduledTasksSummary')
         Disk       = @('Get-DiskInfo','Get-DiskUsage','Find-LargeFiles','Clear-TempFiles','Invoke-DiskMaintenance')
         Security   = @('Test-Admin','Test-RemoteHost','Connect-RemoteHost','Invoke-RemoteCommand','Get-RemoteSessions','Remove-AllRemoteSessions')
