@@ -252,3 +252,74 @@ Update-HelpProfile
 get-error -verbose
 get-error -verbose -Debug
 get-error -Debug
+get-command -CommandType function -listimported *
+updatemods
+Resolve-OhMyPoshThemePath
+oh-my-posh
+oh-my-posh get
+oh-my-posh download
+oh-my-posh install
+oh-my-posh --help
+oh-my-posh upgrade
+oh-my-posh toggle
+oh-my-posh font
+oh-my-posh font install
+get-error -verbose -Debug
+get-command -CommandType function -listimported *
+ Test-ThresholdAlerts
+ updatemods`
+updateall`
+Update-HelpProfile
+Test-ProfileHealth
+Start-DeferredModuleLoader
+ Show-ProfileDiagnostics
+optimize
+Initialize-NativeToolCompleters
+ Initialize-CommandPredictorModules
+ Get-SmartDiskHealth
+Enable-CommandPredictorSupport
+Clear-TempFiles
+Update-NpmPackage
+npm update
+npm
+repair
+scoop update npm
+node
+node.js
+npm
+choco list
+choco
+choco --help
+choco --debug
+choco list --debug
+node --verion
+node -v
+npm -v
+node
+choco upgrade node.js
+choco install node.js
+choco search node.js
+winget install --id Starship.Starship
+notepad $profile
+npm
+node -v
+get-command -CommandType function -listimported *
+``
+
+Update-InstalledModulesCache
+optimize
+Optimize-System
+Clear-TempFiles
+cd
+starship preset gruvbox-rainbow -o ~/.config/starship.toml
+node -v
+cd
+starship preset gruvbox-rainbow -o ~/.config/starship.toml
+mkdir -p ~/.config && touch ~/.config/starship.toml
+touch ~/.config/starship.toml
+get-command -CommandType function -listimported *
+get-error -Debug
+Update-ProfileModules
+Show-ProfileSummary
+notepad $profile
+flushdns

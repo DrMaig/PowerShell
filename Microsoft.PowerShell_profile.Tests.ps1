@@ -379,7 +379,29 @@ Describe 'Idempotency' {
 
     It 'Exit handler registration is idempotent' {
         $content = Get-Content (Join-Path $PSScriptRoot 'Microsoft.PowerShell_profile.ps1') -Raw
-        $content | Should -Match 'Get-EventSubscriber.*PowerShell\.Exiting' -Because "Exit handler should check before registering"
+        $content | Should -Match '(?s)Get-EventSubscriber.*PowerShell\.Exiting' -Because "Exit handler should check before registering"
+    }
+}
+
+Describe 'Completer And Prompt Reliability' {
+    It 'Native completer script parses without syntax errors' {
+        $tokens = $null
+        $errors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot 'Scripts\Initialize-NativeToolCompleters.ps1'),
+            [ref]$tokens, [ref]$errors
+        ) | Out-Null
+        $errors.Count | Should -Be 0 -Because 'native completer script should parse cleanly'
+    }
+
+    It 'Defines Initialize-CommandPredictorModules helper' {
+        $content = Get-Content (Join-Path $PSScriptRoot 'Microsoft.PowerShell_profile.ps1') -Raw
+        $content | Should -Match 'function\s+Initialize-CommandPredictorModules' -Because 'predictor module helper should exist'
+    }
+
+    It 'Defines Enable-CommandPredictorSupport command' {
+        $content = Get-Content (Join-Path $PSScriptRoot 'Microsoft.PowerShell_profile.ps1') -Raw
+        $content | Should -Match 'function\s+Enable-CommandPredictorSupport' -Because 'manual predictor setup command should exist'
     }
 }
 

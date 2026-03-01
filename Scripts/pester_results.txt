@@ -1,6 +1,6 @@
 ========== PESTER SUMMARY ==========
-Total:   64
-Passed:  64
+Total:   67
+Passed:  67
 Failed:  0
 Skipped: 0
-Duration: 00:00:06.8301920
+Duration: 00:00:07.6596447

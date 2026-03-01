@@ -22,10 +22,10 @@
 #
 # .NOTES
 #    Author: PowerShell Profile Builder
-#    Version: 2.0.0
+#    Version: 2.1.0
 #    PowerShell: 7.5+
 #    OS: Windows 10/11 Pro x64
-#    Last Modified: 2026-02-09
+#    Last Modified: 2026-03-01
 #
 # .LINK
 #    Microsoft Learn: https://learn.microsoft.com/powershell/
@@ -43,10 +43,31 @@
     Provides fundamental runtime safety, environment validation, and bootstrapping
     capabilities to ensure the PowerShell profile operates in a controlled manner.
 #>
-if ($env:TERM_PROGRAM -eq "vscode") { . "$(code --locate-shell-integration-path pwsh)" }
+if ($env:TERM_PROGRAM -eq "vscode") {
+    try {
+        $vscodeShellIntegration = $null
+
+        # Prefer VS Code-provided integration path (most reliable in integrated terminal)
+        if ($env:VSCODE_SHELL_INTEGRATION -and (Test-Path -LiteralPath $env:VSCODE_SHELL_INTEGRATION)) {
+            $vscodeShellIntegration = $env:VSCODE_SHELL_INTEGRATION
+        } elseif (Get-Command code -ErrorAction Ignore) {
+            # Fallback to CLI discovery when the env var is unavailable
+            $vscodeShellIntegration = & code --locate-shell-integration-path pwsh 2>$null
+            if (-not $vscodeShellIntegration) {
+                $vscodeShellIntegration = & code --locate-shell-integration-path powershell 2>$null
+            }
+        }
+
+        if ($vscodeShellIntegration -and (Test-Path -LiteralPath $vscodeShellIntegration)) {
+            . $vscodeShellIntegration
+        }
+    } catch {
+        # VSCode shell integration unavailable; continue without it
+    }
+}
 
 # Profile version
-$script:ProfileVersion = '2.0.0'
+$script:ProfileVersion = '2.1.0'
 
 # Profile load start timestamp
 $Global:ProfileLoadStart = Get-Date
@@ -122,10 +143,73 @@ if (-not (Test-Path variable:global:OnExitActions)) {
 #region 2 - PLATFORM DETECTION AND GLOBAL FLAGS
 #==============================================================================
 
-# --- FIX: Ensure ProfileConfig is initialized with all required nested properties ---
+function ConvertTo-ProfileHashtable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object]$InputObject
+    )
 
-if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction SilentlyContinue)) {
-    $Global:ProfileConfig = [ordered]@{
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        $result = [ordered]@{}
+        foreach ($key in $InputObject.Keys) {
+            $result[$key] = ConvertTo-ProfileHashtable -InputObject $InputObject[$key]
+        }
+        return $result
+    }
+
+    if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string])) {
+        $result = @()
+        foreach ($item in $InputObject) {
+            $result += , (ConvertTo-ProfileHashtable -InputObject $item)
+        }
+        return $result
+    }
+
+    if ($InputObject -is [pscustomobject]) {
+        $result = [ordered]@{}
+        foreach ($prop in $InputObject.PSObject.Properties) {
+            $result[$prop.Name] = ConvertTo-ProfileHashtable -InputObject $prop.Value
+        }
+        return $result
+    }
+
+    return $InputObject
+}
+
+function Merge-ProfileConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Base,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Override
+    )
+
+    foreach ($key in $Override.Keys) {
+        if ($Base.Contains($key) -and ($Base[$key] -is [System.Collections.IDictionary]) -and ($Override[$key] -is [System.Collections.IDictionary])) {
+            $nestedBase = [hashtable](ConvertTo-ProfileHashtable -InputObject $Base[$key])
+            $nestedOverride = [hashtable](ConvertTo-ProfileHashtable -InputObject $Override[$key])
+            $Base[$key] = Merge-ProfileConfig -Base $nestedBase -Override $nestedOverride
+        } else {
+            $Base[$key] = $Override[$key]
+        }
+    }
+
+    return $Base
+}
+
+function Get-ProfileConfigDefaults {
+    [CmdletBinding()]
+    param()
+
+    return [ordered]@{
         # Display Settings
         ShowDiagnostics   = $true
         ShowWelcome       = $true
@@ -148,6 +232,15 @@ if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction Silen
 
         # Editor and Tools
         Editor            = 'code'
+
+        # Startup control
+        StartupMode       = 'full'
+        Features          = @{
+            UsePSReadLine = $true
+            UseWelcomeScreen = $true
+            UseDeferredModuleLoader = $true
+            UseCompletions = $true
+        }
 
         # History and Performance
         UpdateCheckDays   = 7
@@ -199,6 +292,8 @@ if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction Silen
             BellStyle = 'None'
             PredictionSource = 'HistoryAndPlugin'
             PredictionViewStyle = 'ListView'
+            EnablePredictorModules = $true
+            PredictorModules = @('CompletionPredictor', 'Az.Tools.Predictor')
             HistoryNoDuplicates = $true
             HistorySearchCursorMovesToEnd = $true
             ShowToolTips = $true
@@ -233,6 +328,106 @@ if ($null -eq (Get-Variable -Name ProfileConfig -Scope Global -ErrorAction Silen
         # NetworkProfiles will be initialized later
     }
 }
+
+function Get-ProfileConfigPath {
+    [CmdletBinding()]
+    param()
+
+    return (Join-Path $PSScriptRoot 'powershell.config.json')
+}
+
+function Import-ProfileRuntimeConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$BaseConfig
+    )
+
+    $configPath = Get-ProfileConfigPath
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return $BaseConfig
+    }
+
+    try {
+        $rawConfig = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -Depth 64 -ErrorAction Stop
+        $runtimeConfig = [hashtable](ConvertTo-ProfileHashtable -InputObject $rawConfig)
+    } catch {
+        Write-Warning "Profile config could not be loaded from '$configPath': $($_.Exception.Message). Using defaults."
+        return $BaseConfig
+    }
+
+    if ($runtimeConfig.Contains('Profile') -and ($runtimeConfig.Profile -is [System.Collections.IDictionary])) {
+        $BaseConfig = Merge-ProfileConfig -Base $BaseConfig -Override ([hashtable](ConvertTo-ProfileHashtable -InputObject $runtimeConfig.Profile))
+    }
+
+    if ($runtimeConfig.Contains('LoggingEnabled')) {
+        $BaseConfig.EnableLogging = [bool]$runtimeConfig.LoggingEnabled
+    }
+
+    if ($runtimeConfig.Contains('StartupMode') -and $runtimeConfig.StartupMode) {
+        $BaseConfig.StartupMode = [string]$runtimeConfig.StartupMode
+    }
+
+    if ($runtimeConfig.Contains('User') -and ($runtimeConfig.User -is [System.Collections.IDictionary]) -and $runtimeConfig.User.Contains('Editor')) {
+        $BaseConfig.Editor = [string]$runtimeConfig.User.Editor
+    }
+
+    if ($runtimeConfig.Contains('Features') -and ($runtimeConfig.Features -is [System.Collections.IDictionary])) {
+        if ($runtimeConfig.Features.Contains('UsePSReadLine')) {
+            $BaseConfig.Features.UsePSReadLine = [bool]$runtimeConfig.Features.UsePSReadLine
+        }
+        if ($runtimeConfig.Features.Contains('UseOhMyPosh')) {
+            $BaseConfig.EnableOhMyPosh = [bool]$runtimeConfig.Features.UseOhMyPosh
+        }
+        if ($runtimeConfig.Features.Contains('UseWelcomeScreen')) {
+            $BaseConfig.WelcomeScreen.Show = [bool]$runtimeConfig.Features.UseWelcomeScreen
+            $BaseConfig.Features.UseWelcomeScreen = [bool]$runtimeConfig.Features.UseWelcomeScreen
+        }
+        if ($runtimeConfig.Features.Contains('UseDeferredModuleLoader')) {
+            $BaseConfig.Features.UseDeferredModuleLoader = [bool]$runtimeConfig.Features.UseDeferredModuleLoader
+        }
+        if ($runtimeConfig.Features.Contains('UseCompletions')) {
+            $BaseConfig.Features.UseCompletions = [bool]$runtimeConfig.Features.UseCompletions
+        }
+    }
+
+    if ($runtimeConfig.Contains('Modules') -and ($runtimeConfig.Modules -is [System.Collections.IDictionary]) -and $runtimeConfig.Modules.Contains('ImportOnStartup')) {
+        $importOnStartup = @($runtimeConfig.Modules.ImportOnStartup | Where-Object { $_ })
+        if ($importOnStartup.Count -gt 0) {
+            $BaseConfig.DeferredLoader.Modules = $importOnStartup
+        }
+    }
+
+    switch -Regex ($BaseConfig.StartupMode) {
+        '^(minimal|safe)$' {
+            $BaseConfig.ShowDiagnostics = $false
+            $BaseConfig.WelcomeScreen.Show = $false
+            $BaseConfig.Features.UseWelcomeScreen = $false
+            $BaseConfig.Features.UseDeferredModuleLoader = $false
+            $BaseConfig.DeferredLoader.Modules = @()
+            $BaseConfig.EnableOhMyPosh = $false
+            $BaseConfig.EnableTerminalIcons = $false
+            $BaseConfig.EnablePoshGit = $false
+            break
+        }
+        default { }
+    }
+
+    return $BaseConfig
+}
+
+$defaultProfileConfig = Get-ProfileConfigDefaults
+if (Test-Path variable:global:ProfileConfig) {
+    $externalProfileConfigValue = $Global:ProfileConfig
+} else {
+    $externalProfileConfigValue = $null
+}
+if ($externalProfileConfigValue -and ($externalProfileConfigValue -is [System.Collections.IDictionary])) {
+    $externalProfileConfig = [hashtable](ConvertTo-ProfileHashtable -InputObject $externalProfileConfigValue)
+    $defaultProfileConfig = Merge-ProfileConfig -Base $defaultProfileConfig -Override $externalProfileConfig
+}
+
+$Global:ProfileConfig = Import-ProfileRuntimeConfig -BaseConfig $defaultProfileConfig
 
 # Ensure ErrorHandling defaults exist even when ProfileConfig was preloaded externally
 if (-not $Global:ProfileConfig.Contains('ErrorHandling')) {
@@ -601,7 +796,7 @@ function Test-Environment {
     $commandsToCheck = @('git', 'winget', 'choco', 'scoop', 'oh-my-posh', 'code', 'python', 'node', 'npm')
     $missing = @()
     foreach ($c in $commandsToCheck) {
-        if (-not (Get-Command $c -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command $c -ErrorAction Ignore)) {
             $missing += $c
         }
     }
@@ -726,6 +921,72 @@ try {
     Reference: https://learn.microsoft.com/powershell/module/psreadline/
 #>
 
+function Set-ProfilePSReadLineKeyHandler {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [string]$Function,
+        [string]$BriefDescription,
+        [string]$LongDescription,
+        [scriptblock]$ScriptBlock
+    )
+
+    try {
+        if ($ScriptBlock) {
+            Set-PSReadLineKeyHandler -Key $Key -BriefDescription $BriefDescription -LongDescription $LongDescription -ScriptBlock $ScriptBlock -ErrorAction Stop
+        } else {
+            Set-PSReadLineKeyHandler -Key $Key -Function $Function -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        Write-ProfileLog "PSReadLine key handler failed for '$Key': $($_.Exception.Message)" -Level DEBUG -Component "PSReadLine"
+        return $false
+    }
+}
+
+function Initialize-CommandPredictorModules {
+    [CmdletBinding()]
+    param([hashtable]$Options)
+
+    if (-not $Options.EnablePredictorModules) {
+        return @()
+    }
+
+    $loaded = @()
+    foreach ($moduleName in @($Options.PredictorModules)) {
+        if (-not $moduleName) { continue }
+
+        $moduleInfo = Get-Module -ListAvailable -Name $moduleName -ErrorAction Ignore |
+            Select-Object -First 1
+        if (-not $moduleInfo) {
+            continue
+        }
+
+        $missingDependencies = @()
+        foreach ($requiredModule in @($moduleInfo.RequiredModules)) {
+            $requiredName = if ($requiredModule -is [string]) { $requiredModule } else { $requiredModule.Name }
+            if (-not $requiredName) { continue }
+            if (-not (Get-Module -ListAvailable -Name $requiredName -ErrorAction Ignore)) {
+                $missingDependencies += $requiredName
+            }
+        }
+
+        if ($missingDependencies.Count -gt 0) {
+            Write-ProfileLog "Predictor module '$moduleName' skipped; missing dependencies: $($missingDependencies -join ', ')" -Level DEBUG -Component "PSReadLine"
+            continue
+        }
+
+        Import-Module -Name $moduleName -ErrorAction Ignore | Out-Null
+        if (Get-Module -Name $moduleName -ErrorAction Ignore) {
+            $loaded += $moduleName
+        } else {
+            Write-ProfileLog "Predictor module '$moduleName' was not loaded" -Level DEBUG -Component "PSReadLine"
+        }
+    }
+
+    return $loaded
+}
+
 function Initialize-PSReadLine {
     <#
     .SYNOPSIS
@@ -748,90 +1009,99 @@ function Initialize-PSReadLine {
 
         $opts = $Global:ProfileConfig.PSReadLine
 
+        # Ensure history path parent exists
+        if ($opts.HistorySavePath) {
+            $historyDir = Split-Path -Path $opts.HistorySavePath -Parent
+            if ($historyDir -and -not (Test-Path -LiteralPath $historyDir)) {
+                New-Item -ItemType Directory -Path $historyDir -Force | Out-Null
+            }
+        }
+
         # Basic options
         Set-PSReadLineOption -EditMode $opts.EditMode
         Set-PSReadLineOption -MaximumHistoryCount $opts.HistorySize
         Set-PSReadLineOption -HistorySavePath $opts.HistorySavePath
         Set-PSReadLineOption -BellStyle $opts.BellStyle
 
+        $loadedPredictors = Initialize-CommandPredictorModules -Options $opts
+
         # Prediction settings (PowerShell 7.2+)
         if ($PSVersionTable.PSVersion -ge [version]'7.2.0') {
             try {
-                Set-PSReadLineOption -PredictionSource $opts.PredictionSource -ErrorAction SilentlyContinue
+                $predictionSource = $opts.PredictionSource
+                if ($predictionSource -eq 'HistoryAndPlugin' -and @($loadedPredictors).Count -eq 0) {
+                    $predictionSource = 'History'
+                }
+
+                Set-PSReadLineOption -PredictionSource $predictionSource -ErrorAction Ignore
             } catch {
                 # Fallback to History only
-                Set-PSReadLineOption -PredictionSource History -ErrorAction SilentlyContinue
+                Set-PSReadLineOption -PredictionSource History -ErrorAction Ignore
             }
         } else {
-            Set-PSReadLineOption -PredictionSource History -ErrorAction SilentlyContinue
+            Set-PSReadLineOption -PredictionSource History -ErrorAction Ignore
         }
 
-        Set-PSReadLineOption -PredictionViewStyle $opts.PredictionViewStyle -ErrorAction SilentlyContinue
-        Set-PSReadLineOption -HistoryNoDuplicates:$opts.HistoryNoDuplicates -ErrorAction SilentlyContinue
-        Set-PSReadLineOption -HistorySearchCursorMovesToEnd:$opts.HistorySearchCursorMovesToEnd -ErrorAction SilentlyContinue
-        Set-PSReadLineOption -ShowToolTips:$opts.ShowToolTips -ErrorAction SilentlyContinue
+        Set-PSReadLineOption -PredictionViewStyle $opts.PredictionViewStyle -ErrorAction Ignore
+        Set-PSReadLineOption -HistoryNoDuplicates:$opts.HistoryNoDuplicates -ErrorAction Ignore
+        Set-PSReadLineOption -HistorySearchCursorMovesToEnd:$opts.HistorySearchCursorMovesToEnd -ErrorAction Ignore
+        Set-PSReadLineOption -ShowToolTips:$opts.ShowToolTips -ErrorAction Ignore
 
         # Colors
         if ($opts.Colors) {
-            Set-PSReadLineOption -Colors $opts.Colors -ErrorAction SilentlyContinue
+            Set-PSReadLineOption -Colors $opts.Colors -ErrorAction Ignore
         }
 
         # Key bindings
         foreach ($kb in $opts.KeyBindings.GetEnumerator()) {
-            try {
-                Set-PSReadLineKeyHandler -Key $kb.Key -Function $kb.Value -ErrorAction SilentlyContinue
-            } catch {
-                Write-ProfileLog "PSReadLine key handler failed for '$($kb.Key)': $($_.Exception.Message)" -Level DEBUG -Component "PSReadLine"
-            }
+            Set-ProfilePSReadLineKeyHandler -Key $kb.Key -Function $kb.Value | Out-Null
         }
 
         # Maximum kill ring count
-        Set-PSReadLineOption -MaximumKillRingCount $opts.MaximumKillRingCount -ErrorAction SilentlyContinue
+        Set-PSReadLineOption -MaximumKillRingCount $opts.MaximumKillRingCount -ErrorAction Ignore
 
         # Word delimiters for Ctrl+Backspace, Ctrl+Left/Right word navigation
         if ($opts.WordDelimiters) {
-            Set-PSReadLineOption -WordDelimiters $opts.WordDelimiters -ErrorAction SilentlyContinue
+            Set-PSReadLineOption -WordDelimiters $opts.WordDelimiters -ErrorAction Ignore
         }
 
         # ── Productivity key bindings ──────────────────────────────────
         # Tab → MenuComplete: shows a navigable completion menu instead of cycling
-        Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
-        Set-PSReadLineKeyHandler -Key Shift+Tab -Function TabCompletePrevious
+        Set-ProfilePSReadLineKeyHandler -Key Tab -Function MenuComplete | Out-Null
+        Set-ProfilePSReadLineKeyHandler -Key Shift+Tab -Function TabCompletePrevious | Out-Null
 
         # Arrow keys → context-aware history search (type partial cmd then ↑/↓)
-        Set-PSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward
-        Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+        Set-ProfilePSReadLineKeyHandler -Key UpArrow -Function HistorySearchBackward | Out-Null
+        Set-ProfilePSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward | Out-Null
 
         # Ctrl+Space → show all available completions in a list
-        Set-PSReadLineKeyHandler -Key Ctrl+Spacebar -Function PossibleCompletions
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+Spacebar -Function PossibleCompletions | Out-Null
 
         # F1 → show help for current command in a separate window
-        Set-PSReadLineKeyHandler -Key F1 -Function ShowCommandHelp
+        Set-ProfilePSReadLineKeyHandler -Key F1 -Function ShowCommandHelp | Out-Null
 
         # F2 → toggle between inline and list prediction view
-        Set-PSReadLineKeyHandler -Key F2 -Function SwitchPredictionView
+        Set-ProfilePSReadLineKeyHandler -Key F2 -Function SwitchPredictionView | Out-Null
 
         # Ctrl+r / Ctrl+s → interactive history search (Emacs-style)
-        Set-PSReadLineKeyHandler -Key Ctrl+r -Function ReverseSearchHistory
-        Set-PSReadLineKeyHandler -Key Ctrl+s -Function ForwardSearchHistory
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+r -Function ReverseSearchHistory | Out-Null
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+s -Function ForwardSearchHistory | Out-Null
 
         # Ctrl+w → delete word backward (Unix muscle memory)
-        Set-PSReadLineKeyHandler -Key Ctrl+w -Function BackwardDeleteWord
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+w -Function BackwardDeleteWord | Out-Null
 
         # Alt+d → delete word forward
-        Set-PSReadLineKeyHandler -Key Alt+d -Function DeleteWord
+        Set-ProfilePSReadLineKeyHandler -Key Alt+d -Function DeleteWord | Out-Null
 
         # Alt+. → insert last argument of previous command (huge time saver)
-        Set-PSReadLineKeyHandler -Key Alt+Period -Function YankLastArg
+        Set-ProfilePSReadLineKeyHandler -Key Alt+. -Function YankLastArg | Out-Null
 
         # Ctrl+Home / Ctrl+End → jump to start/end of buffer
-        Set-PSReadLineKeyHandler -Key Ctrl+Home -Function BeginningOfLine
-        Set-PSReadLineKeyHandler -Key Ctrl+End -Function EndOfLine
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+Home -Function BeginningOfLine | Out-Null
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+End -Function EndOfLine | Out-Null
 
         # Smart paired quotes: typing " inserts paired quotes with cursor inside
-        Set-PSReadLineKeyHandler -Key '"', "'" -BriefDescription SmartInsertQuote `
-            -LongDescription 'Insert paired quotes; wrap selection if text is selected' `
-            -ScriptBlock {
+        Set-ProfilePSReadLineKeyHandler -Key '"' -BriefDescription SmartInsertQuote -LongDescription 'Insert paired quotes; wrap selection if text is selected' -ScriptBlock {
                 param($key, $arg)
                 $quote = $key.KeyChar
                 $selectionStart = $null
@@ -839,11 +1109,12 @@ function Initialize-PSReadLine {
                 [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
                 $line = $null; $cursor = $null
                 [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($null -eq $line) { $line = '' }
                 if ($selectionStart -ne -1) {
                     # Wrap selected text in quotes
                     [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $quote + $line.SubString($selectionStart, $selectionLength) + $quote)
                     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
-                } elseif ($line[$cursor] -eq $quote) {
+                } elseif ($cursor -lt $line.Length -and $line[$cursor] -eq $quote) {
                     # Skip over closing quote
                     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
                 } else {
@@ -851,12 +1122,30 @@ function Initialize-PSReadLine {
                     [Microsoft.PowerShell.PSConsoleReadLine]::Insert($quote + $quote)
                     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
                 }
-            }
+            } | Out-Null
+
+        Set-ProfilePSReadLineKeyHandler -Key "'" -BriefDescription SmartInsertQuote -LongDescription 'Insert paired quotes; wrap selection if text is selected' -ScriptBlock {
+                param($key, $arg)
+                $quote = $key.KeyChar
+                $selectionStart = $null
+                $selectionLength = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($null -eq $line) { $line = '' }
+                if ($selectionStart -ne -1) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $quote + $line.SubString($selectionStart, $selectionLength) + $quote)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+                } elseif ($cursor -lt $line.Length -and $line[$cursor] -eq $quote) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($quote + $quote)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                }
+            } | Out-Null
 
         # Smart paired braces: typing ( { [ inserts the pair
-        Set-PSReadLineKeyHandler -Key '(', '{', '[' -BriefDescription InsertPairedBrace `
-            -LongDescription 'Insert matching closing brace; wrap selection if selected' `
-            -ScriptBlock {
+        Set-ProfilePSReadLineKeyHandler -Key '(' -BriefDescription InsertPairedBrace -LongDescription 'Insert matching closing brace; wrap selection if selected' -ScriptBlock {
                 param($key, $arg)
                 $openChar  = $key.KeyChar
                 $closeChar = switch ($openChar) { '(' { ')' } '{' { '}' } '[' { ']' } }
@@ -871,31 +1160,90 @@ function Initialize-PSReadLine {
                     [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar + $closeChar)
                     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
                 }
-            }
+            } | Out-Null
+
+        Set-ProfilePSReadLineKeyHandler -Key '{' -BriefDescription InsertPairedBrace -LongDescription 'Insert matching closing brace; wrap selection if selected' -ScriptBlock {
+                param($key, $arg)
+                $openChar  = $key.KeyChar
+                $closeChar = switch ($openChar) { '(' { ')' } '{' { '}' } '[' { ']' } }
+                $selectionStart = $null; $selectionLength = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($selectionStart -ne -1) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $openChar + $line.SubString($selectionStart, $selectionLength) + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                }
+            } | Out-Null
+
+        Set-ProfilePSReadLineKeyHandler -Key '[' -BriefDescription InsertPairedBrace -LongDescription 'Insert matching closing brace; wrap selection if selected' -ScriptBlock {
+                param($key, $arg)
+                $openChar  = $key.KeyChar
+                $closeChar = switch ($openChar) { '(' { ')' } '{' { '}' } '[' { ']' } }
+                $selectionStart = $null; $selectionLength = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($selectionStart -ne -1) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $openChar + $line.SubString($selectionStart, $selectionLength) + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar + $closeChar)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                }
+            } | Out-Null
 
         # Smart closing brace: skip over existing close brace if it matches
-        Set-PSReadLineKeyHandler -Key ')', '}', ']' -BriefDescription SmartCloseBrace `
-            -LongDescription 'Skip over closing brace if next char matches; otherwise insert' `
-            -ScriptBlock {
+        Set-ProfilePSReadLineKeyHandler -Key ')' -BriefDescription SmartCloseBrace -LongDescription 'Skip over closing brace if next char matches; otherwise insert' -ScriptBlock {
                 param($key, $arg)
                 $line = $null; $cursor = $null
                 [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-                if ($line[$cursor] -eq $key.KeyChar) {
+                if ($null -eq $line) { $line = '' }
+                if ($cursor -lt $line.Length -and $line[$cursor] -eq $key.KeyChar) {
                     [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
                 } else {
                     [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
                 }
-            }
+            } | Out-Null
+
+        Set-ProfilePSReadLineKeyHandler -Key '}' -BriefDescription SmartCloseBrace -LongDescription 'Skip over closing brace if next char matches; otherwise insert' -ScriptBlock {
+                param($key, $arg)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($null -eq $line) { $line = '' }
+                if ($cursor -lt $line.Length -and $line[$cursor] -eq $key.KeyChar) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
+                }
+            } | Out-Null
+
+        Set-ProfilePSReadLineKeyHandler -Key ']' -BriefDescription SmartCloseBrace -LongDescription 'Skip over closing brace if next char matches; otherwise insert' -ScriptBlock {
+                param($key, $arg)
+                $line = $null; $cursor = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+                if ($null -eq $line) { $line = '' }
+                if ($cursor -lt $line.Length -and $line[$cursor] -eq $key.KeyChar) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+                } else {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($key.KeyChar)
+                }
+            } | Out-Null
 
         # Ctrl+Shift+c → copy entire command line
-        Set-PSReadLineKeyHandler -Key Ctrl+Shift+c -BriefDescription CopyEntireLine `
-            -LongDescription 'Copy the entire command line to clipboard' `
-            -ScriptBlock {
+        Set-ProfilePSReadLineKeyHandler -Key Ctrl+Shift+c -BriefDescription CopyEntireLine -LongDescription 'Copy the entire command line to clipboard' -ScriptBlock {
                 param($key, $arg)
                 $line = $null; $cursor = $null
                 [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
                 if ($line) { Set-Clipboard $line }
-            }
+            } | Out-Null
+
+        if (@($loadedPredictors).Count -gt 0) {
+            Write-ProfileLog "PSReadLine predictors loaded: $($loadedPredictors -join ', ')" -Level DEBUG -Component "PSReadLine"
+        }
 
         Write-ProfileLog "PSReadLine configured successfully" -Level INFO -Component "PSReadLine"
         return $true
@@ -916,7 +1264,7 @@ function Show-PSReadLineConfig {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command Get-PSReadLineOption -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command Get-PSReadLineOption -ErrorAction Ignore)) {
         Write-Host "PSReadLine not available" -ForegroundColor Yellow
         return
     }
@@ -929,7 +1277,7 @@ function Show-PSReadLineConfig {
 }
 
 # Initialize PSReadLine for interactive sessions
-if (Test-ProfileInteractive) {
+if ((Test-ProfileInteractive) -and $Global:ProfileConfig.Features.UsePSReadLine) {
     Initialize-PSReadLine | Out-Null
 }
 
@@ -974,7 +1322,7 @@ function Update-InstalledModulesCache {
 
         $installed = [ordered]@{}
         try {
-            $mods = Get-InstalledModule -ErrorAction SilentlyContinue
+            $mods = Get-InstalledModule -ErrorAction Ignore
             foreach ($m in $mods) {
                 $installed[$m.Name] = @{
                     Name = $m.Name
@@ -987,7 +1335,7 @@ function Update-InstalledModulesCache {
             }
         } catch {
             # Fallback to Get-Module -ListAvailable
-            $mods = Get-Module -ListAvailable -ErrorAction SilentlyContinue | Group-Object Name | ForEach-Object { $_.Group | Sort-Object Version -Descending | Select-Object -First 1 }
+            $mods = Get-Module -ListAvailable -ErrorAction Ignore | Group-Object Name | ForEach-Object { $_.Group | Sort-Object Version -Descending | Select-Object -First 1 }
             foreach ($m in $mods) {
                 $installed[$m.Name] = @{
                     Name = $m.Name
@@ -1063,7 +1411,7 @@ function Test-ModuleAvailable {
     }
 
     # Fallback to direct check
-    $mod = Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    $mod = Get-Module -ListAvailable -Name $Name -ErrorAction Ignore | Select-Object -First 1
     if ($mod) {
         if ($MinimumVersion -and $mod.Version -lt $MinimumVersion) { return $false }
         return $true
@@ -1141,7 +1489,7 @@ function Ensure-Module {
             return $true
         }
 
-        if ($InstallIfMissing -and (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
+        if ($InstallIfMissing -and (Get-Command Install-Module -ErrorAction Ignore)) {
             # Ensure PSGallery is registered
             if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
                 Register-PSRepository -Name PSGallery -SourceLocation 'https://www.powershellgallery.com/api/v2' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
@@ -1210,7 +1558,7 @@ function Start-DeferredModuleLoader {
             $result = @{}
             foreach ($mod in $mods) {
                 try {
-                    if (Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue) {
+                    if (Get-Module -ListAvailable -Name $mod -ErrorAction Ignore) {
                         Import-Module $mod -ErrorAction Stop -Global
                         $result[$mod] = 'Imported'
                     } else {
@@ -1226,15 +1574,15 @@ function Start-DeferredModuleLoader {
         $job = $null
         try {
             $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList (, $Modules) -ErrorAction Stop
-            $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds -ErrorAction SilentlyContinue
+            $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds -ErrorAction Ignore
             if ($completed) {
-                $res = Receive-Job -Job $job -ErrorAction SilentlyContinue
+                $res = Receive-Job -Job $job -ErrorAction Ignore
                 foreach ($k in $res.Keys) { $status[$k] = $res[$k] }
             } else {
                 foreach ($m in $Modules) {
                     if ($status[$m] -eq 'Pending') { $status[$m] = 'Timeout' }
                 }
-                try { Stop-Job -Job $job -ErrorAction SilentlyContinue } catch { Write-ProfileLog "Stop-Job failed during deferred loader timeout: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
+                try { Stop-Job -Job $job -ErrorAction Ignore } catch { Write-ProfileLog "Stop-Job failed during deferred loader timeout: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
             }
         } catch {
             Write-CaughtException -Context "Start-DeferredModuleLoader job execution" -ErrorRecord $_ -Component "Modules" -Level WARN
@@ -1243,7 +1591,7 @@ function Start-DeferredModuleLoader {
             }
         } finally {
             if ($job) {
-                try { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue } catch { Write-ProfileLog "Remove-Job failed during deferred loader cleanup: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
+                try { Remove-Job -Job $job -Force -ErrorAction Ignore } catch { Write-ProfileLog "Remove-Job failed during deferred loader cleanup: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
             }
         }
     } else {
@@ -1273,7 +1621,7 @@ function Start-DeferredModuleLoader {
 # Update-InstalledModulesCache | Out-Null  # <-- removed for startup speed
 
 # Start deferred loader for interactive sessions
-if ((Test-ProfileInteractive) -and $Global:ProfileConfig.DeferredLoader.Modules.Count -gt 0) {
+if ((Test-ProfileInteractive) -and $Global:ProfileConfig.Features.UseDeferredModuleLoader -and $Global:ProfileConfig.DeferredLoader.Modules.Count -gt 0) {
     Start-DeferredModuleLoader -UseJobs:$Global:ProfileConfig.DeferredLoader.UseJobs | Out-Null
 }
 
@@ -1911,7 +2259,7 @@ function Get-NetworkAdapters {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        if (-not (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue)) { return @() }
+        if (-not (Get-Command Get-NetAdapter -ErrorAction Ignore)) { return @() }
 
         $adapters = Get-NetAdapter -ErrorAction SilentlyContinue
         if ($UpOnly) { $adapters = $adapters | Where-Object Status -eq 'Up' }
@@ -1939,7 +2287,7 @@ function Get-DnsConfig {
     if (-not $Global:IsWindows) { return $null }
 
     try {
-        if (-not (Get-Command Get-DnsClientServerAddress -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command Get-DnsClientServerAddress -ErrorAction Ignore)) {
             return $null
         }
 
@@ -2184,7 +2532,7 @@ function Test-Internet {
 
     # DNS test
     try {
-        if ($Global:IsWindows -and (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)) {
+        if ($Global:IsWindows -and (Get-Command Resolve-DnsName -ErrorAction Ignore)) {
             $dns = Resolve-DnsName -Name $DnsName -ErrorAction SilentlyContinue -TimeoutSeconds ([math]::Ceiling($TimeoutMs / 1000))
             $result.Dns = $null -ne $dns
         } else {
@@ -2643,7 +2991,7 @@ function Test-ProfileHealth {
     }
 
     # Test 5: PSReadLine configuration
-    $psrlOk = $null -ne (Get-Command Get-PSReadLineOption -ErrorAction SilentlyContinue)
+    $psrlOk = $null -ne (Get-Command Get-PSReadLineOption -ErrorAction Ignore)
     $report.Tests += [pscustomobject]@{ Test = 'PSReadLine Config'; Status = if ($psrlOk) { 'PASS' } else { 'WARN' }; Details = if ($psrlOk) { 'Configured' } else { 'Not configured' } }
 
     # Test 6: Deferred modules
@@ -2881,7 +3229,7 @@ function Get-ScheduledTasksSummary {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { return @() }
+        if (-not (Get-Command Get-ScheduledTask -ErrorAction Ignore)) { return @() }
 
         $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue
         if ($Filter) { $tasks = $tasks | Where-Object TaskName -like "*$Filter*" }
@@ -3112,7 +3460,7 @@ function Get-WindowsUpdateStatus {
     if (-not $Global:IsWindows) { return $null }
 
     try {
-        if (-not (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command Get-WindowsUpdate -ErrorAction Ignore)) {
             return [PSCustomObject]@{
                 ModuleAvailable = $false
                 Note = 'PSWindowsUpdate module not available. Install with: Install-Module PSWindowsUpdate'
@@ -3142,7 +3490,7 @@ function Update-ProfileModules {
     param()
 
     try {
-        if (-not (Get-Command Update-Module -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command Update-Module -ErrorAction Ignore)) {
             Write-Host "Update-Module not available. Ensure PowerShellGet is installed." -ForegroundColor Yellow
             return $false
         }
@@ -3382,7 +3730,7 @@ function Get-CustomPrompt {
 
         # Git status (if available)
         $gitBranch = $null
-        if (Get-Command git -ErrorAction SilentlyContinue) {
+        if (Get-Command git -ErrorAction Ignore) {
             try {
                 $gitBranch = git branch --show-current 2>$null
             } catch {
@@ -3414,6 +3762,32 @@ function Get-CustomPrompt {
     }
 }
 
+function Resolve-OhMyPoshThemePath {
+    [CmdletBinding()]
+    param()
+
+    $preferredTheme = Join-Path $Global:ProfileConfig.ThemesPath 'atomic.omp.json'
+    if (Test-Path -LiteralPath $preferredTheme) {
+        return $preferredTheme
+    }
+
+    $localTheme = Get-ChildItem -Path $Global:ProfileConfig.ThemesPath -Filter '*.omp.json' -File -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+    if ($localTheme) {
+        return $localTheme
+    }
+
+    if ($env:POSH_THEMES_PATH -and (Test-Path -LiteralPath $env:POSH_THEMES_PATH)) {
+        $bundledTheme = Get-ChildItem -Path $env:POSH_THEMES_PATH -Filter '*.omp.json' -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($bundledTheme) {
+            return $bundledTheme
+        }
+    }
+
+    return $null
+}
+
 function Initialize-OhMyPosh {
     <#
     .SYNOPSIS
@@ -3424,32 +3798,44 @@ function Initialize-OhMyPosh {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
-        Write-ProfileLog "oh-my-posh not found" -Level DEBUG -Component "Prompt"
+    $ompCommand = Get-Command 'oh-my-posh' -ErrorAction Ignore |
+        Select-Object -First 1
+
+    if (-not $ompCommand) {
+        Write-ProfileLog "oh-my-posh not found; skipping oh-my-posh initialization" -Level DEBUG -Component "Prompt"
         return $false
     }
 
     try {
-        # Discover theme: check local Themes/ folder for any .omp.json, then POSH_THEMES_PATH
-        $themeCandidates = @(
-            (Get-ChildItem -Path $Global:ProfileConfig.ThemesPath -Filter '*.omp.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
-            (if ($env:POSH_THEMES_PATH) { Get-ChildItem -Path $env:POSH_THEMES_PATH -Filter '*.omp.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName } else { $null })
-        ) | Where-Object { $_ -and (Test-Path $_) }
-
-        # Build init arguments
+        $themePath = Resolve-OhMyPoshThemePath
         $ompArgs = @('init', 'pwsh')
-        if ($themeCandidates.Count -gt 0) {
-            $themePath = $themeCandidates[0]
+        if ($themePath) {
             $ompArgs += '--config'
             $ompArgs += $themePath
         } else {
             $themePath = '(default)'
         }
 
-        # Use ScriptBlock::Create to safely evaluate the multi-line init script
-        $initScript = (@(& oh-my-posh @ompArgs) -join "`n")
-        if ($initScript) {
-            & ([ScriptBlock]::Create($initScript))
+        $initScript = (& $ompCommand.Source @ompArgs) | Out-String
+
+        if (-not [string]::IsNullOrWhiteSpace($initScript)) {
+            $trimmedInit = $initScript.TrimStart()
+            if ($trimmedInit -match '^(#!|export\s+)' -or $trimmedInit -match '^if\s+\[' -or $trimmedInit -match '^function\s+_omp_init\(\)') {
+                Write-ProfileLog "oh-my-posh init returned non-PowerShell script; skipping prompt init" -Level WARN -Component "Prompt"
+                return $false
+            }
+
+            $initPath = $null
+            if ($trimmedInit -match "&\s*'([^']+init\.[^']+\.ps1)'") {
+                $initPath = $matches[1]
+            }
+
+            if ($initPath -and (Test-Path -LiteralPath $initPath)) {
+                . $initPath
+            } else {
+                & ([ScriptBlock]::Create($initScript))
+            }
+
             Write-ProfileLog "oh-my-posh initialized with theme: $themePath" -Level DEBUG -Component "Prompt"
         } else {
             Write-ProfileLog "oh-my-posh init returned empty output" -Level WARN -Component "Prompt"
@@ -3461,6 +3847,36 @@ function Initialize-OhMyPosh {
         Write-CaughtException -Context "Initialize-OhMyPosh failed" -ErrorRecord $_ -Component "Prompt" -Level DEBUG
         return $false
     }
+}
+
+function Repair-TerminalIconsUserThemes {
+    [CmdletBinding()]
+    param()
+
+    $storagePath = Join-Path $env:APPDATA 'powershell\Community\Terminal-Icons'
+    if (-not (Test-Path -LiteralPath $storagePath)) {
+        return $false
+    }
+
+    $hadRepair = $false
+    $targets = Get-ChildItem -Path $storagePath -Filter '*.xml' -File -ErrorAction SilentlyContinue
+    foreach ($target in $targets) {
+        try {
+            $null = [xml](Get-Content -LiteralPath $target.FullName -Raw -ErrorAction Stop)
+        } catch {
+            $backupName = "$($target.BaseName).corrupt.$(Get-Date -Format 'yyyyMMddHHmmss').bak"
+            $backupPath = Join-Path $storagePath $backupName
+            try {
+                Move-Item -LiteralPath $target.FullName -Destination $backupPath -Force -ErrorAction Stop
+                $hadRepair = $true
+                Write-ProfileLog "Terminal-Icons user theme repaired: moved corrupt file '$($target.Name)' to '$backupName'" -Level WARN -Component "Prompt"
+            } catch {
+                Write-ProfileLog "Terminal-Icons repair failed for '$($target.Name)': $($_.Exception.Message)" -Level WARN -Component "Prompt"
+            }
+        }
+    }
+
+    return $hadRepair
 }
 
 function Initialize-TerminalIcons {
@@ -3483,10 +3899,22 @@ function Initialize-TerminalIcons {
         Write-ProfileLog "Terminal-Icons initialized" -Level DEBUG -Component "Prompt"
         return $true
     } catch {
-        # Terminal-Icons can fail with XML/manifest parse errors on some versions;
-        # fall back gracefully so the rest of the prompt stack still loads.
-        Write-ProfileLog "Terminal-Icons initialization failed (non-blocking): $($_.Exception.Message)" -Level DEBUG -Component "Prompt"
-        return $false
+        $firstError = $_.Exception.Message
+        Write-ProfileLog "Terminal-Icons initialization failed (non-blocking): $firstError" -Level DEBUG -Component "Prompt"
+
+        $repaired = Repair-TerminalIconsUserThemes
+        if (-not $repaired) {
+            return $false
+        }
+
+        try {
+            Import-Module Terminal-Icons -Force -ErrorAction Stop
+            Write-ProfileLog "Terminal-Icons initialized after user theme repair" -Level WARN -Component "Prompt"
+            return $true
+        } catch {
+            Write-ProfileLog "Terminal-Icons re-initialization failed (non-blocking): $($_.Exception.Message)" -Level DEBUG -Component "Prompt"
+            return $false
+        }
     }
 }
 
@@ -3573,7 +4001,7 @@ function Get-PackageManagerStatus {
 
     $results = @()
     foreach ($m in $managers) {
-        $cmd = Get-Command $m.Command -ErrorAction SilentlyContinue
+        $cmd = Get-Command $m.Command -ErrorAction Ignore
         $version = $null
         if ($cmd) {
             try {
@@ -3614,7 +4042,7 @@ function Get-WingetPackage {
         [switch]$Exact
     )
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget -ErrorAction Ignore)) {
         Write-Warning "winget is not installed or not in PATH."
         return
     }
@@ -3647,7 +4075,7 @@ function Install-WingetPackage {
         [switch]$Silent
     )
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget -ErrorAction Ignore)) {
         Write-Warning "winget is not installed or not in PATH."
         return $false
     }
@@ -3684,7 +4112,7 @@ function Update-WingetPackage {
         [switch]$Silent
     )
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget -ErrorAction Ignore)) {
         Write-Warning "winget is not installed or not in PATH."
         return $false
     }
@@ -3719,7 +4147,7 @@ function Uninstall-WingetPackage {
         [Parameter(Mandatory)][string]$Package
     )
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget -ErrorAction Ignore)) {
         Write-Warning "winget is not installed or not in PATH."
         return $false
     }
@@ -3746,7 +4174,7 @@ function Get-WingetOutdated {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget -ErrorAction Ignore)) {
         Write-Warning "winget is not installed or not in PATH."
         return
     }
@@ -3772,7 +4200,7 @@ function Get-ChocoPackage {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Query)
 
-    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command choco -ErrorAction Ignore)) {
         Write-Warning "Chocolatey is not installed or not in PATH."
         return
     }
@@ -3799,7 +4227,7 @@ function Install-ChocoPackage {
         [switch]$Force
     )
 
-    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command choco -ErrorAction Ignore)) {
         Write-Warning "Chocolatey is not installed or not in PATH."
         return $false
     }
@@ -3830,7 +4258,7 @@ function Update-ChocoPackage {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([string]$Package = 'all')
 
-    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command choco -ErrorAction Ignore)) {
         Write-Warning "Chocolatey is not installed or not in PATH."
         return $false
     }
@@ -3862,7 +4290,7 @@ function Uninstall-ChocoPackage {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory)][string]$Package)
 
-    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command choco -ErrorAction Ignore)) {
         Write-Warning "Chocolatey is not installed or not in PATH."
         return $false
     }
@@ -3893,7 +4321,7 @@ function Get-ScoopPackage {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Query)
 
-    if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command scoop -ErrorAction Ignore)) {
         Write-Warning "Scoop is not installed or not in PATH."
         return
     }
@@ -3920,7 +4348,7 @@ function Install-ScoopPackage {
         [switch]$Global
     )
 
-    if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command scoop -ErrorAction Ignore)) {
         Write-Warning "Scoop is not installed or not in PATH."
         return $false
     }
@@ -3953,7 +4381,7 @@ function Update-ScoopPackage {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([string]$Package = '*')
 
-    if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command scoop -ErrorAction Ignore)) {
         Write-Warning "Scoop is not installed or not in PATH."
         return $false
     }
@@ -3997,7 +4425,7 @@ function Get-NpmPackage {
         [int]$Limit = 20
     )
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command npm -ErrorAction Ignore)) {
         Write-Warning "npm is not installed or not in PATH."
         return
     }
@@ -4028,7 +4456,7 @@ function Install-NpmPackage {
         [switch]$Dev
     )
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command npm -ErrorAction Ignore)) {
         Write-Warning "npm is not installed or not in PATH."
         return $false
     }
@@ -4070,7 +4498,7 @@ function Update-NpmPackage {
         [switch]$Global
     )
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command npm -ErrorAction Ignore)) {
         Write-Warning "npm is not installed or not in PATH."
         return $false
     }
@@ -4105,23 +4533,23 @@ function Get-NodeVersion {
 
     $result = @{}
 
-    if (Get-Command node -ErrorAction SilentlyContinue) {
+    if (Get-Command node -ErrorAction Ignore) {
         $result.NodeVersion = (node --version) -replace '^v'
     }
 
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
+    if (Get-Command npm -ErrorAction Ignore) {
         $result.NpmVersion = (npm --version)
     }
 
-    if (Get-Command nvm -ErrorAction SilentlyContinue) {
+    if (Get-Command nvm -ErrorAction Ignore) {
         $result.NvmVersion = (nvm version)
     }
 
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+    if (Get-Command pnpm -ErrorAction Ignore) {
         $result.PnpmVersion = (pnpm --version)
     }
 
-    if (Get-Command yarn -ErrorAction SilentlyContinue) {
+    if (Get-Command yarn -ErrorAction Ignore) {
         $result.YarnVersion = (yarn --version)
     }
 
@@ -4147,7 +4575,7 @@ function Get-PipPackage {
         [switch]$Outdated
     )
 
-    if (-not (Get-Command pip -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command pip -ErrorAction Ignore)) {
         Write-Warning "pip is not installed or not in PATH."
         return
     }
@@ -4183,7 +4611,7 @@ function Install-PipPackage {
         [switch]$Upgrade
     )
 
-    if (-not (Get-Command pip -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command pip -ErrorAction Ignore)) {
         Write-Warning "pip is not installed or not in PATH."
         return $false
     }
@@ -4222,7 +4650,7 @@ function Update-PipPackage {
         [switch]$User
     )
 
-    if (-not (Get-Command pip -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command pip -ErrorAction Ignore)) {
         Write-Warning "pip is not installed or not in PATH."
         return $false
     }
@@ -4265,7 +4693,7 @@ function Install-PipxPackage {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][string]$Package)
 
-    if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command pipx -ErrorAction Ignore)) {
         Write-Warning "pipx is not installed or not in PATH."
         return $false
     }
@@ -4292,19 +4720,19 @@ function Get-PythonVersion {
 
     $result = @{}
 
-    if (Get-Command python -ErrorAction SilentlyContinue) {
+    if (Get-Command python -ErrorAction Ignore) {
         $result.PythonVersion = (python --version) -replace '^Python\s+'
     }
 
-    if (Get-Command pip -ErrorAction SilentlyContinue) {
+    if (Get-Command pip -ErrorAction Ignore) {
         $result.PipVersion = (pip --version) -split '\s+' | Select-Object -Index 1
     }
 
-    if (Get-Command pipx -ErrorAction SilentlyContinue) {
+    if (Get-Command pipx -ErrorAction Ignore) {
         $result.PipxVersion = (pipx --version)
     }
 
-    if (Get-Command conda -ErrorAction SilentlyContinue) {
+    if (Get-Command conda -ErrorAction Ignore) {
         $result.CondaVersion = (conda --version) -replace '^conda\s+'
     }
 
@@ -4323,7 +4751,7 @@ function Get-DotnetInfo {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command dotnet -ErrorAction Ignore)) {
         Write-Warning "dotnet CLI is not installed or not in PATH."
         return
     }
@@ -4354,7 +4782,7 @@ function Install-DotnetTool {
         [string]$Version
     )
 
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command dotnet -ErrorAction Ignore)) {
         Write-Warning "dotnet CLI is not installed or not in PATH."
         return $false
     }
@@ -4384,7 +4812,7 @@ function Update-DotnetTool {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([string]$Tool)
 
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command dotnet -ErrorAction Ignore)) {
         Write-Warning "dotnet CLI is not installed or not in PATH."
         return $false
     }
@@ -4442,7 +4870,7 @@ function Install-DevPackage {
         # Auto-detect based on package prefix or available managers
         $priority = @('winget', 'choco', 'npm', 'pip', 'scoop')
         foreach ($m in $priority) {
-            if (Get-Command $m -ErrorAction SilentlyContinue) {
+            if (Get-Command $m -ErrorAction Ignore) {
                 $Manager = $m
                 break
             }
@@ -4482,7 +4910,7 @@ function Update-AllPackages {
     $results = @()
 
     if ($Manager -contains 'all' -or $Manager -contains 'winget') {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
+        if (Get-Command winget -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('winget packages', 'Update')) {
                 Update-WingetPackage -Package 'all'
                 $results += 'winget'
@@ -4491,7 +4919,7 @@ function Update-AllPackages {
     }
 
     if ($Manager -contains 'all' -or $Manager -contains 'choco') {
-        if (Get-Command choco -ErrorAction SilentlyContinue) {
+        if (Get-Command choco -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('choco packages', 'Update')) {
                 Update-ChocoPackage -Package 'all'
                 $results += 'choco'
@@ -4500,7 +4928,7 @@ function Update-AllPackages {
     }
 
     if ($Manager -contains 'all' -or $Manager -contains 'scoop') {
-        if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        if (Get-Command scoop -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('scoop packages', 'Update')) {
                 Update-ScoopPackage
                 $results += 'scoop'
@@ -4509,7 +4937,7 @@ function Update-AllPackages {
     }
 
     if ($Manager -contains 'all' -or $Manager -contains 'npm') {
-        if (Get-Command npm -ErrorAction SilentlyContinue) {
+        if (Get-Command npm -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('npm packages', 'Update')) {
                 Update-NpmPackage -Global
                 $results += 'npm'
@@ -4518,7 +4946,7 @@ function Update-AllPackages {
     }
 
     if ($Manager -contains 'all' -or $Manager -contains 'pip') {
-        if (Get-Command pip -ErrorAction SilentlyContinue) {
+        if (Get-Command pip -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('pip packages', 'Update')) {
                 Update-PipPackage -Package 'all'
                 $results += 'pip'
@@ -4527,7 +4955,7 @@ function Update-AllPackages {
     }
 
     if ($Manager -contains 'all' -or $Manager -contains 'dotnet') {
-        if (Get-Command dotnet -ErrorAction SilentlyContinue) {
+        if (Get-Command dotnet -ErrorAction Ignore) {
             if ($PSCmdlet.ShouldProcess('dotnet tools', 'Update')) {
                 Update-DotnetTool
                 $results += 'dotnet'
@@ -4570,10 +4998,12 @@ function Register-ToolCompletion {
         [Parameter(Mandatory)][scriptblock]$ScriptBlock
     )
 
-    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+    if (Get-Command -Name $Command -ErrorAction Ignore) {
         Register-ArgumentCompleter -CommandName $Command -ScriptBlock $ScriptBlock
     }
 }
+
+if ((Test-ProfileInteractive) -and $Global:ProfileConfig.Features.UseCompletions) {
 
 #------------------------------------------------------------------------------
 # Winget Completions
@@ -4918,10 +5348,43 @@ $NugetCompletion = {
 Register-ToolCompletion -Command 'nuget' -ScriptBlock $NugetCompletion
 
 #------------------------------------------------------------------------------
+# Profile command argument completers
+#------------------------------------------------------------------------------
+
+Register-ArgumentCompleter -CommandName Set-DnsProfile -ParameterName Name -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+
+    try {
+        Initialize-NetworkProfiles | Out-Null
+        foreach ($profileName in $Global:ProfileConfig.NetworkProfiles.Keys) {
+            if ($profileName -like "$wordToComplete*") {
+                [System.Management.Automation.CompletionResult]::new($profileName, $profileName, 'ParameterValue', $profileName)
+            }
+        }
+    } catch {
+        # non-blocking completer
+    }
+}
+
+Register-ArgumentCompleter -CommandName Set-PowerPlan -ParameterName Plan -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+
+    @('Balanced', 'HighPerformance', 'PowerSaver') |
+        Where-Object { $_ -like "$wordToComplete*" } |
+        ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+}
+
+#------------------------------------------------------------------------------
 # Initialize all completions
 #------------------------------------------------------------------------------
 
 Write-ProfileLog "Tool completions registered" -Level DEBUG -Component "Completions"
+
+} else {
+    Write-ProfileLog "Tool completions skipped (non-interactive or disabled)" -Level DEBUG -Component "Completions"
+}
 
 #endregion TOOL INTEGRATIONS AND CODE COMPLETIONS
 
@@ -4940,13 +5403,13 @@ function ... { Set-Location ../.. }
 function ~ { Set-Location ~ }
 
 # Utility aliases
-Set-Alias -Name grep -Value Select-String -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name which -Value Get-Command -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name touch -Value New-Item -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name nano -Value notepad -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name ll -Value Get-ChildItem -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name la -Value Get-ChildItem -Option AllScope -ErrorAction SilentlyContinue
-Set-Alias -Name l -Value Get-ChildItem -Option AllScope -ErrorAction SilentlyContinue
+Set-Alias -Name grep -Value Select-String -Option AllScope -ErrorAction Ignore
+Set-Alias -Name which -Value Get-Command -Option AllScope -ErrorAction Ignore
+function touch { param([Parameter(Mandatory)][string]$Path) if (-not (Test-Path $Path)) { New-Item -Path $Path -ItemType File | Out-Null } else { (Get-Item $Path).LastWriteTime = Get-Date } }
+Set-Alias -Name nano -Value notepad -Option AllScope -ErrorAction Ignore
+Set-Alias -Name ll -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
+Set-Alias -Name la -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
+Set-Alias -Name l -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
 
 # Function aliases for complex operations
 function cd.. { Set-Location .. }
@@ -5005,7 +5468,7 @@ function mods { Get-InstalledModulesCache | Format-List }
 function updatemods { Update-ProfileModules }
 
 # Backward-compat alias for Ensure-Module (non-standard verb)
-Set-Alias -Name Assert-ModuleAvailable -Value Ensure-Module -ErrorAction SilentlyContinue
+Set-Alias -Name Assert-ModuleAvailable -Value Ensure-Module -ErrorAction Ignore
 
 # Quick help
 function helpme {
@@ -5024,6 +5487,40 @@ function helpme {
     Write-Host "  NPM: npi, npu, npug" -ForegroundColor DarkGray
     Write-Host "  Pip: pipl, pipi, pipu" -ForegroundColor DarkGray
     Write-Host ""
+}
+
+function Enable-CommandPredictorSupport {
+    [CmdletBinding()]
+    param([switch]$Install)
+
+    $candidateModules = @('CompletionPredictor', 'Az.Tools.Predictor')
+    $available = @()
+
+    foreach ($moduleName in $candidateModules) {
+        if (Get-Module -ListAvailable -Name $moduleName -ErrorAction Ignore) {
+            $available += $moduleName
+            continue
+        }
+
+        if ($Install) {
+            Write-Host "Installing predictor module: $moduleName" -ForegroundColor Yellow
+            Install-Module -Name $moduleName -Scope CurrentUser -AllowClobber -Force
+            $available += $moduleName
+        }
+    }
+
+    if ($available.Count -eq 0) {
+        Write-Host "No predictor modules available. Run: Enable-CommandPredictorSupport -Install" -ForegroundColor Yellow
+        return
+    }
+
+    foreach ($moduleName in $available) {
+        Import-Module $moduleName -ErrorAction Ignore | Out-Null
+    }
+
+    Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction Ignore
+    Set-PSReadLineOption -PredictionViewStyle ListView -ErrorAction Ignore
+    Write-Host "Predictor support enabled: $($available -join ', ')" -ForegroundColor Green
 }
 
 # Package manager quick aliases
@@ -5062,110 +5559,30 @@ function updateall { Update-AllPackages -Manager 'all' }
     This region loads native completers on-demand to avoid startup overhead.
 #>
 
-# Git native completer (if posh-git not loaded, fall back)
-if ((Get-Command git -ErrorAction SilentlyContinue) -and -not (Get-Module posh-git -ErrorAction SilentlyContinue)) {
-    $gitCompleter = (& git --list-cmds=all 2>$null) -split '\n' | Where-Object { $_ }
-    if ($gitCompleter.Count -gt 0) {
-        Register-ArgumentCompleter -CommandName git -ScriptBlock {
-            param($wordToComplete, $commandAst, $cursorPosition)
-            $words = $commandAst.ToString().Split();
-            $subcommand = if ($words.Count -gt 1) { $words[1] } else { '' }
-            
-            if (-not $subcommand) {
-                # Complete git subcommands
-                (& git --list-cmds=builtins 2>$null) -split '\n' | 
-                    Where-Object { $_ -like "$wordToComplete*" } | 
-                    ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
-            }
-        } -ErrorAction SilentlyContinue
+function Initialize-NativeToolCompleters {
+    [CmdletBinding()]
+    param()
+
+    $nativeCompleterScriptPath = Join-Path $PSScriptRoot 'Scripts\Initialize-NativeToolCompleters.ps1'
+    if (-not (Test-Path -LiteralPath $nativeCompleterScriptPath)) {
+        Write-ProfileLog "Native completer script not found at '$nativeCompleterScriptPath'" -Level WARN -Component "Completions"
+        return $false
     }
-}
 
-# kubectl native completer (if installed)
-if (Get-Command kubectl -ErrorAction SilentlyContinue) {
-    Register-ArgumentCompleter -CommandName kubectl -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
-        $Local:word = $wordToComplete.Replace('"', '""')
-        $Local:ast = $commandAst.Extent.Text.Replace('"', '""')
-        $Local:cmd = @"
-            `$wordToComplete = '$word'
-            `$commandAst = '$ast'
-            `$cursorPosition = $cursorPosition
-            & kubectl __complete "$ast" $cursorPosition | ForEach-Object { 
-                [System.Management.Automation.CompletionResult]::new(`$_, `$_, 'ParameterValue', `$_)
-            }
-"@
-        try {
-            powershell.exe -NoProfile -Command $cmd 2>$null
-        } catch {
-            # kubectl completion unavailable; fall back to static completions
-        }
-    } -ErrorAction SilentlyContinue
-}
-
-# docker native completer (if installed)
-if (Get-Command docker -ErrorAction SilentlyContinue) {
-    Register-ArgumentCompleter -CommandName docker -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
-        $words = $commandAst.ToString().Split()
-        if ($words.Count -eq 1) {
-            # Complete docker subcommands: build, run, ps, pull, push, etc.
-            & docker help 2>$null | grep -E '^\s+[a-z]' | awk '{print $1}' | 
-                Where-Object { $_ -like "$wordToComplete*" } | 
-                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
-        }
-    } -ErrorAction SilentlyContinue
-}
-
-# AWS CLI v2 native completer (if installed)
-if (Get-Command aws -ErrorAction SilentlyContinue) {
-    $awsCompleteScript = (aws_completer 2>$null)
-    if ($awsCompleteScript) {
-        Register-ArgumentCompleter -CommandName aws -ScriptBlock ([scriptblock]::Create($awsCompleteScript)) -ErrorAction SilentlyContinue
-    }
-}
-
-# az CLI native completer (if installed and az_completer available)
-if (Get-Command az -ErrorAction SilentlyContinue) {
     try {
-        $azCompleterPath = (az --version 2>$null | Select-String -Pattern 'completer' | Select-Object -First 1)
-        if ($azCompleterPath) {
-            # az completion is engine-based; load via eval-style
-        }
+        . $nativeCompleterScriptPath
+        return $true
     } catch {
-        # az completer unavailable
+        Write-CaughtException -Context "Initialize-NativeToolCompleters" -ErrorRecord $_ -Component "Completions" -Level WARN
+        return $false
     }
 }
 
-# Terraform native completer (if installed)
-if (Get-Command terraform -ErrorAction SilentlyContinue) {
-    Register-ArgumentCompleter -CommandName terraform -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
-        $words = $commandAst.ToString().Split()
-        if ($words.Count -eq 1) {
-            # Complete terraform subcommands
-            @('init', 'plan', 'apply', 'destroy', 'validate', 'fmt', 'workspace', 'state', 'output', 'console', 'taint', 'untaint', 'refresh', 'import', 'graph', 'show', 'providers', 'version', 'help') |
-                Where-Object { $_ -like "$wordToComplete*" } |
-                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
-        }
-    } -ErrorAction SilentlyContinue
+if ((Test-ProfileInteractive) -and $Global:ProfileConfig.Features.UseCompletions) {
+    Initialize-NativeToolCompleters | Out-Null
+} else {
+    Write-ProfileLog "Native tool completers skipped (non-interactive or disabled)" -Level DEBUG -Component "Completions"
 }
-
-# Helm native completer (if installed)
-if (Get-Command helm -ErrorAction SilentlyContinue) {
-    Register-ArgumentCompleter -CommandName helm -ScriptBlock {
-        param($wordToComplete, $commandAst, $cursorPosition)
-        $words = $commandAst.ToString().Split()
-        if ($words.Count -eq 1) {
-            # Complete helm subcommands
-            @('install', 'uninstall', 'upgrade', 'rollback', 'list', 'status', 'get', 'values', 'env', 'repo', 'search', 'pull', 'push', 'chart', 'version', 'help') |
-                Where-Object { $_ -like "$wordToComplete*" } |
-                ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
-        }
-    } -ErrorAction SilentlyContinue
-}
-
-Write-ProfileLog "Native tool completers registered (context-aware)" -Level DEBUG -Component "Completions"
 
 #endregion NATIVE TOOL COMPLETERS AND SHIMS
 
@@ -5217,7 +5634,7 @@ function Show-WelcomeScreen {
 
         Write-Host ''
         Write-Host '    ╔══════════════════════════════════════════════════════════════╗' -ForegroundColor Cyan
-        Write-Host '    ║          PowerShell 7.5+ Professional Profile v2.0           ║' -ForegroundColor Cyan
+        Write-Host '    ║          PowerShell 7.5+ Professional Profile v2.1           ║' -ForegroundColor Cyan
         Write-Host '    ╠══════════════════════════════════════════════════════════════╣' -ForegroundColor Cyan
         Write-Host (Format-BoxLine 'Version:'        $verStr)   -ForegroundColor Cyan
         Write-Host (Format-BoxLine 'Load Time:'      $timeStr)  -ForegroundColor Cyan
@@ -5282,7 +5699,7 @@ $Global:ProfileLoadedTimestamp = $Global:ProfileLoadEnd
 Write-ProfileLog "Profile loaded in $($Global:ProfileLoadDuration.TotalMilliseconds)ms" -Level INFO -Component "Bootstrap"
 
 # FIX: Restore ProgressPreference after profile load
-if ($script:OriginalProgressPreference) {
+if ($null -ne $script:OriginalProgressPreference) {
     $ProgressPreference = $script:OriginalProgressPreference
 }
 
@@ -5322,11 +5739,9 @@ function Register-ExitAction {
 }
 
 # --- FIX: Remove unsupported OnRemove handler and use Register-EngineEvent for exit ---
-try {
-    $existingSub = Get-EventSubscriber -SourceIdentifier 'PowerShell.Exiting' -ErrorAction Stop
-} catch {
-    $existingSub = $null
-}
+$existingSub = Get-EventSubscriber -ErrorAction Ignore |
+    Where-Object { $_.SourceIdentifier -eq 'PowerShell.Exiting' } |
+    Select-Object -First 1
 if (-not $existingSub) {
     Register-EngineEvent PowerShell.Exiting -Action {
         foreach ($action in $global:OnExitActions) {
@@ -5477,7 +5892,7 @@ function Get-SmartDiskHealth {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        if (-not (Get-Command Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Command Get-PhysicalDisk -ErrorAction Ignore)) {
             Write-ProfileLog "Get-PhysicalDisk not available" -Level DEBUG -Component "HWDiag"
             return @()
         }
@@ -5573,7 +5988,7 @@ function Invoke-Traceroute {
     )
 
     try {
-        if ($Global:IsWindows -and (Get-Command Test-Connection -ErrorAction SilentlyContinue)) {
+        if ($Global:IsWindows -and (Get-Command Test-Connection -ErrorAction Ignore)) {
             # PowerShell 7.4+ supports -Traceroute
             if ($PSVersionTable.PSVersion -ge [version]'7.4.0') {
                 return Test-Connection -TargetName $Target -Traceroute -MaxHops $MaxHops -TimeoutSeconds ([math]::Ceiling($TimeoutMs / 1000)) -ErrorAction Stop
@@ -5614,7 +6029,7 @@ function Get-ArpTable {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        if (Get-Command Get-NetNeighbor -ErrorAction SilentlyContinue) {
+        if (Get-Command Get-NetNeighbor -ErrorAction Ignore) {
             return Get-NetNeighbor -ErrorAction SilentlyContinue |
                 Where-Object { $_.State -ne 'Unreachable' } |
                 Select-Object IPAddress, LinkLayerAddress, State, InterfaceAlias
@@ -5703,7 +6118,7 @@ function Get-NicStatistics {
     if (-not $Global:IsWindows) { return @() }
 
     try {
-        if (-not (Get-Command Get-NetAdapterStatistics -ErrorAction SilentlyContinue)) { return @() }
+        if (-not (Get-Command Get-NetAdapterStatistics -ErrorAction Ignore)) { return @() }
         Get-NetAdapterStatistics -ErrorAction SilentlyContinue |
             Select-Object Name,
                 @{N='ReceivedGB';E={[math]::Round($_.ReceivedBytes/1GB,3)}},
@@ -5761,7 +6176,7 @@ function Test-DnsResolution {
         [string]$RecordType = 'A'
     )
 
-    if (-not $Global:IsWindows -or -not (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)) {
+    if (-not $Global:IsWindows -or -not (Get-Command Resolve-DnsName -ErrorAction Ignore)) {
         Write-ProfileLog "Test-DnsResolution requires Windows Resolve-DnsName" -Level WARN -Component "NetToolkit"
         return @()
     }
@@ -6342,7 +6757,7 @@ function Show-CommandPalette {
         System     = @('Get-SystemInfo','Get-CPUInfo','Get-MemoryInfo','Get-GPUInfo','Get-BIOSInfo','Get-Uptime','Get-SystemHealth','Get-HardwareSummary','Get-SmartDiskHealth','Get-BatteryHealth')
         Network    = @('Get-LocalIP','Get-PublicIP','Get-NetworkAdapters','Get-DnsConfig','Get-NetworkSnapshot','Test-Internet','Test-TcpPort','Test-DnsResolution','Invoke-Traceroute','Get-ArpTable','Invoke-PortScan','Get-NicStatistics','Get-LinkSpeed','Set-DnsProfile','Use-BestDns','Clear-DnsCache')
         Package    = @('Get-PackageManagerStatus','Install-DevPackage','Update-AllPackages','Get-WingetPackage','Get-ChocoPackage','Get-NpmPackage','Get-PipPackage','Get-DotnetInfo')
-        Diagnostic = @('Show-ProfileDiagnostics','Test-ProfileHealth','Repair-Profile','Show-EnvironmentReport','Collect-SystemSnapshot','Test-ProfileScript')
+        Diagnostic = @('Show-ProfileDiagnostics','Test-ProfileHealth','Repair-Profile','Show-EnvironmentReport','Collect-SystemSnapshot','Test-ProfileScript','Invoke-ProfileLint','Invoke-ProfilePesterTests')
         Process    = @('Get-TopProcesses','Get-ProcessTree','Stop-ProcessByName','Get-ServiceHealth','Restart-ServiceByName','Get-ScheduledTasksSummary')
         Disk       = @('Get-DiskInfo','Get-DiskUsage','Find-LargeFiles','Clear-TempFiles','Invoke-DiskMaintenance')
         Security   = @('Test-Admin','Test-RemoteHost','Connect-RemoteHost','Invoke-RemoteCommand','Get-RemoteSessions','Remove-AllRemoteSessions')
@@ -6356,7 +6771,7 @@ function Show-CommandPalette {
         if (-not $commands.ContainsKey($cat)) { continue }
         Write-Host "`n  $cat" -ForegroundColor Yellow
         foreach ($cmd in $commands[$cat]) {
-            $exists = $null -ne (Get-Command $cmd -ErrorAction SilentlyContinue)
+            $exists = $null -ne (Get-Command $cmd -ErrorAction Ignore)
             $indicator = if ($exists) { '[+]' } else { '[-]' }
             $color = if ($exists) { 'Green' } else { 'DarkGray' }
             Write-Host "    $indicator $cmd" -ForegroundColor $color
@@ -6379,7 +6794,7 @@ function Find-ProfileCommand {
     param([Parameter(Mandatory)][string]$Keyword)
 
     try {
-        $functions = Get-Command -CommandType Function -ErrorAction SilentlyContinue |
+        $functions = Get-Command -CommandType Function -ErrorAction Ignore |
             Where-Object { $_.Source -eq '' -and ($_.Name -like "*$Keyword*") } |
             Select-Object Name, @{N='Type';E={'Function'}},
                 @{N='Synopsis';E={try{(Get-Help $_.Name -ErrorAction SilentlyContinue).Synopsis}catch{''}}}
@@ -6584,7 +6999,7 @@ function Invoke-ProfileLint {
         [switch]$Fix
     )
 
-    if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction Ignore)) {
         try {
             Import-Module PSScriptAnalyzer -ErrorAction Stop
         } catch {
@@ -6593,9 +7008,14 @@ function Invoke-ProfileLint {
         }
     }
 
+    # Resolve profile path: prefer AllHosts, fall back to CurrentHost, then PSCommandPath
     $profilePath = $PROFILE.CurrentUserAllHosts
     if (-not $profilePath -or -not (Test-Path $profilePath)) {
         $profilePath = $PROFILE.CurrentUserCurrentHost
+    }
+    if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        # Final fallback: the script file that defined this function
+        $profilePath = Join-Path (Split-Path $PSCommandPath) 'Microsoft.PowerShell_profile.ps1'
     }
     if (-not (Test-Path $profilePath)) {
         Write-Host "Profile script not found at expected path." -ForegroundColor Yellow
@@ -6649,7 +7069,10 @@ function Test-ProfileScript {
     param()
 
     $profilePath = $PROFILE.CurrentUserAllHosts
-    if (-not $profilePath) { $profilePath = $PROFILE.CurrentUserCurrentHost }
+    if (-not $profilePath -or -not (Test-Path $profilePath)) { $profilePath = $PROFILE.CurrentUserCurrentHost }
+    if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        $profilePath = Join-Path (Split-Path $PSCommandPath) 'Microsoft.PowerShell_profile.ps1'
+    }
     if (-not (Test-Path $profilePath)) {
         return [PSCustomObject]@{ Valid = $false; Errors = @('Profile script not found'); Path = $profilePath }
     }
@@ -6689,7 +7112,7 @@ function Invoke-ProfilePesterTests {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command Invoke-Pester -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command Invoke-Pester -ErrorAction Ignore)) {
         try {
             Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
         } catch {
@@ -6794,7 +7217,7 @@ function Sign-ProfileScript {
 }
 
 #endregion ADDED: CODE SIGNING GUIDANCE
-
+#Invoke-Expression (&starship init powershell)
 
 #==============================================================================
 # PROFILE END

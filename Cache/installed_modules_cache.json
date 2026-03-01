@@ -1,98 +1,90 @@
 {
   "AdminToolbox.Networking": {
+    "InstalledAt": "2026-03-01T06:43:18.1209840+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\AdminToolbox.Networking\\2.25.0.5",
+    "Version": "2.25.0.5",
     "Name": "AdminToolbox.Networking",
     "Repository": "PSGallery",
-    "Description": "Network Troubleshooting Functions",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\AdminToolbox.Networking\\2.25.0.4",
-    "InstalledAt": "2026-02-28T22:48:11.9463047+05:00",
-    "Version": "2.25.0.4"
+    "Description": "Network Troubleshooting Functions"
   },
   "Az.Tools.Predictor": {
+    "InstalledAt": "2026-03-01T06:43:18.1255235+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\Az.Tools.Predictor\\1.1.3",
+    "Version": "1.1.3",
     "Name": "Az.Tools.Predictor",
     "Repository": "PSGallery",
-    "Description": "Microsoft Azure PowerShell - Module providing recommendations for cmdlets comprised in the Az module - This module requires PowerShell 7.2 and PSReadLine 2.2.2.\r\n\r\nSuggestions must be activated:\r\n- Enable-AzPredictor:  Activate the suggestions\r\n- Disable-AzPredictor: Disable the suggestions\r\n\r\nFor more information on Az Predictor, please visit the following: https://aka.ms/azpredictordocs",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\Az.Tools.Predictor\\1.1.3",
-    "InstalledAt": "2026-02-28T22:48:11.9534587+05:00",
-    "Version": "1.1.3"
+    "Description": "Microsoft Azure PowerShell - Module providing recommendations for cmdlets comprised in the Az module - This module requires PowerShell 7.2 and PSReadLine 2.2.2.\r\n\r\nSuggestions must be activated:\r\n- Enable-AzPredictor:  Activate the suggestions\r\n- Disable-AzPredictor: Disable the suggestions\r\n\r\nFor more information on Az Predictor, please visit the following: https://aka.ms/azpredictordocs"
   },
   "CompletionPredictor": {
+    "InstalledAt": "2026-03-01T06:43:18.1256314+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\CompletionPredictor\\0.1.1",
+    "Version": "0.1.1",
     "Name": "CompletionPredictor",
     "Repository": "PSGallery",
-    "Description": "Command-line intellisense based on PowerShell auto-completion",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\CompletionPredictor\\0.1.1",
-    "InstalledAt": "2026-02-28T22:48:11.9537462+05:00",
-    "Version": "0.1.1"
-  },
-  "Pester": {
-    "Name": "Pester",
-    "Repository": "PSGallery",
-    "Description": "Pester provides a framework for running BDD style Tests to execute and validate PowerShell commands inside of PowerShell and offers a powerful set of Mocking Functions that allow tests to mimic and mock the functionality of any command inside of a piece of PowerShell code being tested. Pester tests can execute any command or script that is accessible to a pester test file. This can include functions, Cmdlets, Modules and scripts. Pester can be run in ad hoc style in a console or it can be integrated into the Build scripts of a Continuous Integration system.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\Pester\\5.7.1",
-    "InstalledAt": "2026-02-28T22:48:11.9539156+05:00",
-    "Version": "5.7.1"
+    "Description": "Command-line intellisense based on PowerShell auto-completion"
   },
   "posh-git": {
+    "InstalledAt": "2026-03-01T06:43:18.1256975+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\posh-git\\1.1.0",
+    "Version": "1.1.0",
     "Name": "posh-git",
     "Repository": "PSGallery",
-    "Description": "Provides prompt with Git status summary information and tab completion for Git commands, parameters, remotes and branch names.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\posh-git\\1.1.0",
-    "InstalledAt": "2026-02-28T22:48:11.9540699+05:00",
-    "Version": "1.1.0"
+    "Description": "Provides prompt with Git status summary information and tab completion for Git commands, parameters, remotes and branch names."
   },
   "PSFzf": {
+    "InstalledAt": "2026-03-01T06:43:18.1257543+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSFzf\\2.7.9",
+    "Version": "2.7.9",
     "Name": "PSFzf",
     "Repository": "PSGallery",
-    "Description": "A thin wrapper around Fzf (https://github.com/junegunn/fzf).  If PSReadline is loaded, this wrapper registers Fzf with the keyboard chord Ctrl+t.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSFzf\\2.7.9",
-    "InstalledAt": "2026-02-28T22:48:11.9542252+05:00",
-    "Version": "2.7.9"
+    "Description": "A thin wrapper around Fzf (https://github.com/junegunn/fzf).  If PSReadline is loaded, this wrapper registers Fzf with the keyboard chord Ctrl+t."
   },
   "PSReadLine": {
+    "InstalledAt": "2026-03-01T06:43:18.1258089+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSReadLine\\2.4.5",
+    "Version": "2.4.5",
     "Name": "PSReadLine",
     "Repository": "PSGallery",
-    "Description": "Great command line editing in the PowerShell console host",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSReadLine\\2.4.5",
-    "InstalledAt": "2026-02-28T22:48:11.9543824+05:00",
-    "Version": "2.4.5"
+    "Description": "Great command line editing in the PowerShell console host"
   },
   "PSScriptAnalyzer": {
+    "InstalledAt": "2026-03-01T06:43:18.1258681+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSScriptAnalyzer\\1.24.0",
+    "Version": "1.24.0",
     "Name": "PSScriptAnalyzer",
     "Repository": "PSGallery",
-    "Description": "PSScriptAnalyzer provides script analysis and checks for potential code defects in the scripts by applying a group of built-in or customized rules on the scripts being analyzed.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSScriptAnalyzer\\1.24.0",
-    "InstalledAt": "2026-02-28T22:48:11.9545407+05:00",
-    "Version": "1.24.0"
+    "Description": "PSScriptAnalyzer provides script analysis and checks for potential code defects in the scripts by applying a group of built-in or customized rules on the scripts being analyzed."
   },
   "PSWindowsUpdate": {
+    "InstalledAt": "2026-03-01T06:43:18.1259206+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSWindowsUpdate\\2.2.1.5",
+    "Version": "2.2.1.5",
     "Name": "PSWindowsUpdate",
     "Repository": "PSGallery",
-    "Description": "This module contain cmdlets to manage Windows Update Client.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\PSWindowsUpdate\\2.2.1.5",
-    "InstalledAt": "2026-02-28T22:48:11.9547055+05:00",
-    "Version": "2.2.1.5"
+    "Description": "This module contain cmdlets to manage Windows Update Client."
   },
   "scoop-completion": {
+    "InstalledAt": "2026-03-01T06:43:18.1259735+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\scoop-completion\\0.2.3",
+    "Version": "0.2.3",
     "Name": "scoop-completion",
     "Repository": "PSGallery",
-    "Description": "A Scoop tab completion module for PowerShell.",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\scoop-completion\\0.2.3",
-    "InstalledAt": "2026-02-28T22:48:11.9548917+05:00",
-    "Version": "0.2.3"
+    "Description": "A Scoop tab completion module for PowerShell."
   },
   "Terminal-Icons": {
+    "InstalledAt": "2026-03-01T06:43:18.1260263+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\Terminal-Icons\\0.11.0",
+    "Version": "0.11.0",
     "Name": "Terminal-Icons",
     "Repository": "PSGallery",
-    "Description": "PowerShell module to add file icons to terminal based on file extension",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\Terminal-Icons\\0.11.0",
-    "InstalledAt": "2026-02-28T22:48:11.9550512+05:00",
-    "Version": "0.11.0"
+    "Description": "PowerShell module to add file icons to terminal based on file extension"
   },
   "z": {
+    "InstalledAt": "2026-03-01T06:43:18.1260810+05:00",
+    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\z\\1.1.14",
+    "Version": "1.1.14",
     "Name": "z",
     "Repository": "PSGallery",
-    "Description": "z lets you quickly navigate the file system in PowerShell based on your cd command history. It's a port of the z bash shell script",
-    "Path": "C:\\Users\\maig3\\Documents\\PowerShell\\Modules\\z\\1.1.14",
-    "InstalledAt": "2026-02-28T22:48:11.9552284+05:00",
-    "Version": "1.1.14"
+    "Description": "z lets you quickly navigate the file system in PowerShell based on your cd command history. It's a port of the z bash shell script"
   }
 }
