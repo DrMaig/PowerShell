@@ -23,6 +23,7 @@
 # .NOTES
 #    Author: PowerShell Profile Builder
 #    Version: 2.1.0
+#    Version: 2.1.0
 #    PowerShell: 7.5+
 #    OS: Windows 10/11 Pro x64
 #    Last Modified: 2026-03-01
@@ -67,6 +68,7 @@ if ($env:TERM_PROGRAM -eq "vscode") {
 }
 
 # Profile version
+$script:ProfileVersion = '2.1.0'
 $script:ProfileVersion = '2.1.0'
 
 # Profile load start timestamp
@@ -5757,7 +5759,7 @@ if (-not $existingSub) {
 #endregion EXIT HANDLERS AND CLEANUP
 
 
-#region 24 - ADDED: HARDWARE DIAGNOSTICS
+#region 24 - HARDWARE DIAGNOSTICS
 #==============================================================================
 <#
 .SYNOPSIS
@@ -5949,7 +5951,7 @@ function Clear-CimQueryCache {
 #endregion ADDED: HARDWARE DIAGNOSTICS
 
 
-#region 25 - ADDED: NETWORK TOOLKIT
+#region 25 - NETWORK TOOLKIT
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6215,7 +6217,7 @@ function Test-DnsResolution {
 #endregion ADDED: NETWORK TOOLKIT
 
 
-#region 26 - ADDED: EVENT AND LOG HELPERS
+#region 26 - EVENT AND LOG HELPERS
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6358,7 +6360,7 @@ function Get-EventLogSummary {
 #endregion ADDED: EVENT AND LOG HELPERS
 
 
-#region 27 - ADDED: SECURE REMOTE MANAGEMENT
+#region 27 - SECURE REMOTE MANAGEMENT
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6557,7 +6559,7 @@ function Remove-AllRemoteSessions {
 #endregion ADDED: SECURE REMOTE MANAGEMENT
 
 
-#region 28 - ADDED: MONITORING AND ALERTING HOOKS
+#region 28 - MONITORING AND ALERTING HOOKS
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6726,7 +6728,7 @@ function Get-MonitorLog {
 #endregion ADDED: MONITORING AND ALERTING HOOKS
 
 
-#region 29 - ADDED: INTERACTIVE PRODUCTIVITY HELPERS
+#region 29 - INTERACTIVE PRODUCTIVITY HELPERS
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6848,7 +6850,7 @@ function Get-ContextSuggestions {
 #endregion ADDED: INTERACTIVE PRODUCTIVITY HELPERS
 
 
-#region 30 - ADDED: DIAGNOSTICS AUTOMATION
+#region 30 - DIAGNOSTICS AUTOMATION
 #==============================================================================
 <#
 .SYNOPSIS
@@ -6967,7 +6969,7 @@ function Collect-SystemSnapshot {
 #endregion ADDED: DIAGNOSTICS AUTOMATION
 
 
-#region 31 - ADDED: TESTING AND LINTING INTEGRATION
+#region 31 - TESTING AND LINTING INTEGRATION
 #==============================================================================
 <#
 .SYNOPSIS
@@ -7134,7 +7136,7 @@ function Invoke-ProfilePesterTests {
 #endregion ADDED: TESTING AND LINTING INTEGRATION
 
 
-#region 32 - ADDED: CODE SIGNING GUIDANCE
+#region 32 - CODE SIGNING GUIDANCE
 #==============================================================================
 <#
 .SYNOPSIS
