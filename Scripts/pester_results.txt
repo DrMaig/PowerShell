@@ -1,6 +1,11 @@
 ========== PESTER SUMMARY ==========
 Total:   67
-Passed:  67
-Failed:  0
+Passed:  66
+Failed:  1
 Skipped: 0
-Duration: 00:00:07.6596447
+Duration: 00:00:06.2870623
+
+========== FAILURES ==========
+FAIL: [Security Checks] Invoke-Expression is not used (ScriptBlock::Create preferred)
+  Error: Expected 0, because Invoke-Expression was replaced with ScriptBlock::Create for safety, but got 1.
+

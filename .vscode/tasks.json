@@ -8,7 +8,7 @@
             "args": [
                 "-NoProfile",
                 "-Command",
-                "$e=$null; [System.Management.Automation.Language.Parser]::ParseFile('${workspaceFolder}/Microsoft.PowerShell_profile.ps1',[ref]$null,[ref]$e) > $null; if($e){$e | Format-List; exit 1} else {'parse ok'}"
+                "$e=$null; [System.Management.Automation.Language.Parser]::ParseFile(\"./Microsoft.PowerShell_profile.ps1\",[ref]$null,[ref]$e) > $null; if($e){$e | Format-List; exit 1} else {\"parse ok\"}"
             ],
             "problemMatcher": []
         },
@@ -31,7 +31,7 @@
             "args": [
                 "-NoProfile",
                 "-Command",
-                "Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop; Invoke-Pester -Path '${workspaceFolder}/Microsoft.PowerShell_profile.Tests.ps1' -Output Detailed"
+                "Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop; Invoke-Pester -Path \"./Microsoft.PowerShell_profile.Tests.ps1\" -Output Detailed"
             ],
             "group": "test",
             "problemMatcher": []
@@ -43,7 +43,7 @@
             "args": [
                 "-NoProfile",
                 "-Command",
-                "try { Import-Module PSScriptAnalyzer -ErrorAction Stop; Invoke-ScriptAnalyzer -Path '${workspaceFolder}/Microsoft.PowerShell_profile.ps1' -Settings '${workspaceFolder}/PSScriptAnalyzerSettings.psd1' -Severity Error,Warning | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize } catch { 'PSScriptAnalyzer unavailable: ' + $_.Exception.Message }"
+                "try { Import-Module PSScriptAnalyzer -ErrorAction Stop; Invoke-ScriptAnalyzer -Path \"./Microsoft.PowerShell_profile.ps1\" -Settings \"./PSScriptAnalyzerSettings.psd1\" -Severity Error,Warning | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize } catch { \"PSScriptAnalyzer unavailable: $($_.Exception.Message)\" }"
             ],
             "problemMatcher": []
         },
@@ -54,7 +54,7 @@
             "args": [
                 "-NoProfile",
                 "-Command",
-                "Import-Module PSScriptAnalyzer -ErrorAction Stop; $issues = Invoke-ScriptAnalyzer -Path '${workspaceFolder}/Microsoft.PowerShell_profile.ps1' -Settings '${workspaceFolder}/PSScriptAnalyzerSettings.psd1' -Severity Error,Warning; if($issues){$issues | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize; exit 1} else {'analyzer ok'}"
+                "Import-Module PSScriptAnalyzer -ErrorAction Stop; $issues = Invoke-ScriptAnalyzer -Path \"./Microsoft.PowerShell_profile.ps1\" -Settings \"./PSScriptAnalyzerSettings.psd1\" -Severity Error,Warning; if($issues){$issues | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize; exit 1} else {\"analyzer ok\"}"
             ],
             "group": "test",
             "problemMatcher": []
@@ -66,7 +66,7 @@
             "args": [
                 "-NoProfile",
                 "-Command",
-                "Get-Content '${workspaceFolder}/powershell.config.json' -Raw | ConvertFrom-Json | Out-Null; 'config ok'"
+                "Get-Content \"./powershell.config.json\" -Raw | ConvertFrom-Json | Out-Null; \"config ok\""
             ],
             "problemMatcher": []
         },
