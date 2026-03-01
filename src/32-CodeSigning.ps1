@@ -38,11 +38,16 @@ function Sign-ProfileScript {
     .EXAMPLE
         Sign-ProfileScript
     #>
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param(
         [string]$CertSubject = '*PowerShell*',
         [string]$TimestampServer = 'http://timestamp.digicert.com'
     )
+
+    if (-not $IsWindows) {
+        Write-Warning 'Sign-ProfileScript requires Windows (certificate store and Set-AuthenticodeSignature).'
+        return $false
+    }
 
     $profilePath = $PROFILE.CurrentUserAllHosts
     if (-not $profilePath -or -not (Test-Path $profilePath)) {

@@ -102,7 +102,7 @@ function Clear-TempFiles {
     .PARAMETER DaysOld
         Files older than this many days will be removed.
     #>
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param(
         [int]$DaysOld = 7
     )
@@ -112,11 +112,12 @@ function Clear-TempFiles {
     }
 
     try {
-        $tempPaths = @(
-            [IO.Path]::GetTempPath()
-            Join-Path $env:LOCALAPPDATA 'Temp'
-            Join-Path $env:WINDIR 'Temp'
-        )
+        # Build temp paths list — Windows-only paths guarded by $IsWindows
+        $tempPaths = @([IO.Path]::GetTempPath())
+        if ($IsWindows) {
+            if ($env:LOCALAPPDATA) { $tempPaths += Join-Path $env:LOCALAPPDATA 'Temp' }
+            if ($env:WINDIR)       { $tempPaths += Join-Path $env:WINDIR 'Temp' }
+        }
 
         $cutoff = (Get-Date).AddDays(-$DaysOld)
         $removed = 0

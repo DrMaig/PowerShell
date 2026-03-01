@@ -77,12 +77,18 @@ function Test-ThresholdAlerts {
     <#
     .SYNOPSIS
         Checks system metrics against configured thresholds and raises alerts.
+        Windows-only (delegates to Win32_* CIM functions and Get-Counter).
     .EXAMPLE
         Test-ThresholdAlerts
     #>
     [CmdletBinding()]
     [OutputType([PSCustomObject[]])]
     param()
+
+    if (-not $IsWindows) {
+        Write-ProfileLog 'Test-ThresholdAlerts is currently Windows-only' -Level DEBUG -Component 'Monitor'
+        return @()
+    }
 
     $alerts = @()
     $thresholds = $Global:ProfileConfig.AlertThresholds

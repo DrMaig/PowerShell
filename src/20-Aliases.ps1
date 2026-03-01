@@ -23,9 +23,16 @@ function ~ { Set-Location ~ }
 Set-Alias -Name grep -Value Select-String -Option AllScope -ErrorAction Ignore
 Set-Alias -Name which -Value Get-Command -Option AllScope -ErrorAction Ignore
 function touch { param([Parameter(Mandatory)][string]$Path) if (-not (Test-Path $Path)) { New-Item -Path $Path -ItemType File | Out-Null } else { (Get-Item $Path).LastWriteTime = Get-Date } }
-Set-Alias -Name nano -Value notepad -Option AllScope -ErrorAction Ignore
+
+# Editor alias — only map nano→notepad on Windows (avoid shadowing real nano on Unix)
+if ($IsWindows) {
+    Set-Alias -Name nano -Value notepad -Option AllScope -ErrorAction Ignore
+}
+
+# Listing aliases — differentiate behavior to match Unix conventions
+# ll = long listing (default), la = include hidden/force, l = compact
 Set-Alias -Name ll -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
-Set-Alias -Name la -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
+function la { Get-ChildItem -Force @args }
 Set-Alias -Name l -Value Get-ChildItem -Option AllScope -ErrorAction Ignore
 
 # Function aliases for complex operations
@@ -77,8 +84,10 @@ function largefiles { param([string]$p = $PWD, [int]$s = 100, [int]$t = 20) Find
 function edit { param([string]$f) & $Global:ProfileConfig.Editor $f }
 function code. { code . }
 
-# Quick admin
-function sudo { Start-Process pwsh -Verb runAs }
+# Quick admin — only define sudo wrapper on Windows (avoid shadowing real sudo on Unix)
+if ($IsWindows) {
+    function sudo { Start-Process pwsh -Verb runAs }
+}
 
 # Quick module management
 function mods { Get-InstalledModulesCache | Format-List }

@@ -20,6 +20,7 @@ function Get-ServiceHealth {
         Gets service health status.
     .DESCRIPTION
         Returns service status with optional filtering.
+        Windows-only (uses Get-Service).
     .PARAMETER Filter
         Filter by status (Running, Stopped, All).
     #>
@@ -28,6 +29,11 @@ function Get-ServiceHealth {
         [ValidateSet('Running', 'Stopped', 'All')]
         [string]$Filter = 'Running'
     )
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-ServiceHealth requires Windows (Get-Service).'
+        return @()
+    }
 
     try {
         $services = Get-Service -ErrorAction SilentlyContinue
@@ -110,29 +116,33 @@ function Get-ProcessTree {
         Gets process tree structure.
     .DESCRIPTION
         Returns processes in a tree structure showing parent-child relationships.
+        Windows-only for full parent-child resolution (uses Win32_Process CIM).
     .PARAMETER Name
         Process name to filter.
     #>
     [CmdletBinding()]
     param([string]$Name)
 
+    if (-not $IsWindows) {
+        Write-Warning 'Get-ProcessTree requires Windows (Win32_Process CIM class).'
+        return @()
+    }
+
     try {
         $procs = Get-Process -ErrorAction SilentlyContinue
         if ($Name) { $procs = $procs | Where-Object ProcessName -like "*$Name*" }
 
+        # Bulk CIM query for all processes — avoids O(n) individual CIM calls
+        $cimProcs = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction SilentlyContinue
+        $parentMap = @{}
+        foreach ($cp in $cimProcs) { $parentMap[$cp.ProcessId] = $cp.ParentProcessId }
+
         $tree = @()
         foreach ($p in $procs) {
-            $parent = $null
-            try {
-                $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ParentProcessId
-            } catch {
-                Write-ProfileLog "Failed to resolve parent for process '$($p.ProcessName)' ($($p.Id)): $($_.Exception.Message)" -Level DEBUG -Component "Process"
-            }
-
             $tree += [PSCustomObject]@{
                 Id       = $p.Id
                 Name     = $p.ProcessName
-                ParentId = $parent
+                ParentId = $parentMap[$p.Id]
                 Path     = $p.Path
             }
         }

@@ -21,11 +21,17 @@ function Get-PerfSnapshot {
         Captures a performance snapshot.
     .DESCRIPTION
         Returns key performance counters for CPU, memory, and disk.
+        Windows-only (uses Get-Counter with Windows performance counters).
     .PARAMETER SampleSeconds
         Sample interval in seconds (default: 1).
     #>
     [CmdletBinding()]
     param([int]$SampleSeconds = 1)
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-PerfSnapshot requires Windows (performance counters).'
+        return $null
+    }
 
     $ud = $Global:ProfileConfig.UtilityDefaults
     if ($SampleSeconds -le 0 -and $ud.PerfSnapshotSampleSeconds -gt 0) {
@@ -92,6 +98,13 @@ function Get-TopProcesses {
                     Select-Object -First $Top Name, Id, CPU, @{N = 'MemoryMB'; E = { [math]::Round($_.WorkingSet64 / 1MB, 2) }}
             }
             'IO' {
+                # IOReadBytes/IOWriteBytes are only available on Windows
+                if (-not $IsWindows) {
+                    Write-Warning 'IO-based sorting requires Windows. Falling back to Memory.'
+                    return $procs | Sort-Object WorkingSet64 -Descending |
+                        Select-Object -First $Top Name, Id, @{N = 'MemoryMB'; E = { [math]::Round($_.WorkingSet64 / 1MB, 2) }},
+                            @{N = 'CPUTime'; E = { $_.CPU }}
+                }
                 return $procs | Sort-Object IOReadBytes -Descending |
                     Select-Object -First $Top Name, Id, @{N = 'ReadMB'; E = { [math]::Round($_.IOReadBytes / 1MB, 2) }},
                         @{N = 'WriteMB'; E = { [math]::Round($_.IOWriteBytes / 1MB, 2) }}

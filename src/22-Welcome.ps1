@@ -52,7 +52,7 @@ function Show-WelcomeScreen {
 
         Write-Host ''
         Write-Host '    ╔══════════════════════════════════════════════════════════════╗' -ForegroundColor Cyan
-        Write-Host '    ║          PowerShell 7.5+ Professional Profile v2.1           ║' -ForegroundColor Cyan
+        Write-Host "    ║     PowerShell 7.5+ Professional Profile v$($script:ProfileVersion)$(' ' * (62 - 50 - $script:ProfileVersion.Length))║" -ForegroundColor Cyan
         Write-Host '    ╠══════════════════════════════════════════════════════════════╣' -ForegroundColor Cyan
         Write-Host (Format-BoxLine 'Version:'        $verStr)   -ForegroundColor Cyan
         Write-Host (Format-BoxLine 'Load Time:'      $timeStr)  -ForegroundColor Cyan

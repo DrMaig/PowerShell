@@ -6,10 +6,10 @@
 #    Thin orchestrator that dot-sources modular profile components from src/.
 # .NOTES
 #    Author: PowerShell Profile Builder
-#    Version: 3.0.0
+#    Version: 3.1.0
 #    PowerShell: 7.5+
 #    OS: Windows/Linux/macOS
-#    Last Modified: 2026-03-01
+#    Last Modified: 2026-03-02
 #==============================================================================
 
 if ($env:TERM_PROGRAM -eq "vscode") {
@@ -61,13 +61,6 @@ foreach ($component in $script:ComponentOrder) {
         . $componentPath
         $sw.Stop()
 
-        if (-not ($Global:ProfileStats -is [System.Collections.IDictionary])) {
-            $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0; ComponentLoadTimes = [ordered]@{} }
-        }
-        if (-not $Global:ProfileStats.Contains('ComponentLoadTimes') -or -not ($Global:ProfileStats.ComponentLoadTimes -is [System.Collections.IDictionary])) {
-            $Global:ProfileStats.ComponentLoadTimes = [ordered]@{}
-        }
-
         $Global:ProfileStats.ComponentLoadTimes[$component] = [math]::Round($sw.Elapsed.TotalMilliseconds, 2)
 
         if (Get-Command Write-ProfileLog -ErrorAction Ignore) {
@@ -75,13 +68,6 @@ foreach ($component in $script:ComponentOrder) {
         }
     } catch {
         $sw.Stop()
-
-        if (-not ($Global:ProfileStats -is [System.Collections.IDictionary])) {
-            $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0; ComponentLoadTimes = [ordered]@{} }
-        }
-        if (-not $Global:ProfileStats.Contains('ComponentLoadTimes') -or -not ($Global:ProfileStats.ComponentLoadTimes -is [System.Collections.IDictionary])) {
-            $Global:ProfileStats.ComponentLoadTimes = [ordered]@{}
-        }
 
         $Global:ProfileStats.ComponentLoadTimes[$component] = [math]::Round($sw.Elapsed.TotalMilliseconds, 2)
         if (Get-Command Write-CaughtException -ErrorAction Ignore) {

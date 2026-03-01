@@ -243,21 +243,20 @@ $Global:DeferredModulesStatus = [ordered]@{
 function Start-DeferredModuleLoader {
     <#
     .SYNOPSIS
-        Loads optional modules in background for non-blocking profile load.
+        Loads optional modules after profile startup for non-blocking load.
     .DESCRIPTION
-        Uses jobs to load modules asynchronously for better startup performance.
+        Registers a PowerShell.OnIdle engine event to import modules after the
+        first prompt is displayed, keeping profile startup fast. Falls back to
+        synchronous in-process import when OnIdle registration fails.
     .PARAMETER Modules
         Array of module names to load.
     .PARAMETER TimeoutSeconds
-        Timeout for job completion.
-    .PARAMETER UseJobs
-        Use background jobs for loading.
+        Timeout for synchronous fallback (seconds).
     #>
     [CmdletBinding()]
     param(
         [string[]]$Modules = $Global:ProfileConfig.DeferredLoader.Modules,
-        [int]$TimeoutSeconds = $Global:ProfileConfig.DeferredLoader.TimeoutSeconds,
-        [switch]$UseJobs
+        [int]$TimeoutSeconds = $Global:ProfileConfig.DeferredLoader.TimeoutSeconds
     )
 
     if ($Global:DeferredModulesStatus.Started) { return }
@@ -273,68 +272,62 @@ function Start-DeferredModuleLoader {
 
     $status = [ordered]@{}
     foreach ($m in $Modules) { $status[$m] = 'Pending' }
+    $Global:DeferredModulesStatus.Modules = $status
 
-    if ($UseJobs) {
-        $scriptBlock = {
-            param($mods)
-            $result = @{}
-            foreach ($mod in $mods) {
+    # Preferred path: Register-EngineEvent PowerShell.OnIdle imports modules
+    # in the current session after the first prompt, truly non-blocking.
+    $registered = $false
+    try {
+        $null = Register-EngineEvent -SourceIdentifier PowerShell.OnIdle -MaxTriggerCount 1 -Action {
+            $mods = $Event.MessageData.Modules
+            $stat = $Event.MessageData.Status
+            foreach ($m in $mods) {
                 try {
-                    if (Get-Module -ListAvailable -Name $mod -ErrorAction Ignore) {
-                        Import-Module $mod -ErrorAction Stop -Global
-                        $result[$mod] = 'Imported'
+                    if (Get-Module -ListAvailable -Name $m -ErrorAction Ignore) {
+                        Import-Module $m -ErrorAction Stop -Global
+                        $stat[$m] = 'Imported'
                     } else {
-                        $result[$mod] = 'NotFound'
+                        $stat[$m] = 'NotFound'
                     }
                 } catch {
-                    $result[$mod] = "Failed: $($_.Exception.Message)"
+                    $stat[$m] = "Failed: $($_.Exception.Message)"
                 }
             }
-            return $result
-        }
+            $Global:DeferredModulesStatus.Completed = $true
+            $Global:DeferredModulesStatus.CompletedAt = (Get-Date).ToString('o')
 
-        $job = $null
-        try {
-            $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList (, $Modules) -ErrorAction Stop
-            $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds -ErrorAction Ignore
-            if ($completed) {
-                $res = Receive-Job -Job $job -ErrorAction Ignore
-                foreach ($k in $res.Keys) { $status[$k] = $res[$k] }
-            } else {
-                foreach ($m in $Modules) {
-                    if ($status[$m] -eq 'Pending') { $status[$m] = 'Timeout' }
-                }
-                try { Stop-Job -Job $job -ErrorAction Ignore } catch { Write-ProfileLog "Stop-Job failed during deferred loader timeout: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
+            $imported = $stat.GetEnumerator() | Where-Object { $_.Value -eq 'Imported' } | ForEach-Object { $_.Key }
+            if ($imported -and (Get-Command Write-ProfileLog -ErrorAction Ignore)) {
+                Write-ProfileLog "Deferred modules loaded (OnIdle): $($imported -join ', ')" -Level DEBUG -Component 'Modules'
             }
-        } catch {
-            Write-CaughtException -Context "Start-DeferredModuleLoader job execution" -ErrorRecord $_ -Component "Modules" -Level WARN
-            foreach ($m in $Modules) {
-                if ($status[$m] -eq 'Pending') { $status[$m] = 'Failed' }
-            }
-        } finally {
-            if ($job) {
-                try { Remove-Job -Job $job -Force -ErrorAction Ignore } catch { Write-ProfileLog "Remove-Job failed during deferred loader cleanup: $($_.Exception.Message)" -Level DEBUG -Component "Modules" }
-            }
-        }
-    } else {
+        } -MessageData @{ Modules = $Modules; Status = $status } -ErrorAction Stop
+        $registered = $true
+    } catch {
+        Write-ProfileLog "OnIdle registration failed, using synchronous fallback: $($_.Exception.Message)" -Level DEBUG -Component 'Modules'
+    }
+
+    # Fallback: synchronous in-process import (still correct — loads into caller session)
+    if (-not $registered) {
         foreach ($m in $Modules) {
             try {
-                Import-Module $m -ErrorAction Stop -Global
-                $status[$m] = 'Imported'
+                if (Get-Module -ListAvailable -Name $m -ErrorAction Ignore) {
+                    Import-Module $m -ErrorAction Stop -Global
+                    $status[$m] = 'Imported'
+                } else {
+                    $status[$m] = 'NotFound'
+                }
             } catch {
                 $status[$m] = "Failed: $($_.Exception.Message)"
             }
         }
-    }
 
-    $Global:DeferredModulesStatus.Modules = $status
-    $Global:DeferredModulesStatus.Completed = $true
-    $Global:DeferredModulesStatus.CompletedAt = (Get-Date).ToString('o')
+        $Global:DeferredModulesStatus.Completed = $true
+        $Global:DeferredModulesStatus.CompletedAt = (Get-Date).ToString('o')
 
-    # Log results
-    $imported = $status.GetEnumerator() | Where-Object { $_.Value -eq 'Imported' } | ForEach-Object { $_.Key }
-    if ($imported) {
-        Write-ProfileLog "Deferred modules loaded: $($imported -join ', ')" -Level DEBUG -Component "Modules"
+        $imported = $status.GetEnumerator() | Where-Object { $_.Value -eq 'Imported' } | ForEach-Object { $_.Key }
+        if ($imported) {
+            Write-ProfileLog "Deferred modules loaded (sync): $($imported -join ', ')" -Level DEBUG -Component 'Modules'
+        }
     }
 }
 
@@ -342,9 +335,9 @@ function Start-DeferredModuleLoader {
 # Update-InstalledModulesCache is called lazily by Get-InstalledModulesCache
 # Update-InstalledModulesCache | Out-Null  # <-- removed for startup speed
 
-# Start deferred loader for interactive sessions
+# Start deferred loader for interactive sessions (uses OnIdle event for true async)
 if ((Test-ProfileInteractive) -and $Global:ProfileConfig.Features.UseDeferredModuleLoader -and $Global:ProfileConfig.DeferredLoader.Modules.Count -gt 0) {
-    Start-DeferredModuleLoader -UseJobs:$Global:ProfileConfig.DeferredLoader.UseJobs | Out-Null
+    Start-DeferredModuleLoader | Out-Null
 }
 
 #endregion MODULE MANAGEMENT SYSTEM

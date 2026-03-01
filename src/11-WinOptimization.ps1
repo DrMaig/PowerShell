@@ -21,8 +21,13 @@ function Optimize-System {
     .DESCRIPTION
         Cleans temporary files and performs non-destructive optimizations.
     #>
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Optimize-System requires Windows.'
+        return $false
+    }
 
     if (-not (Test-Admin)) {
         Write-ProfileLog "Optimize-System requires admin privileges" -Level WARN -Component "Optimization"

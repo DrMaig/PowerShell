@@ -15,7 +15,7 @@
     capabilities to ensure the PowerShell profile operates in a controlled manner.
 #>
 # Profile version
-$script:ProfileVersion = '3.0.0'
+$script:ProfileVersion = '3.1.0'
 
 # Profile load start timestamp
 $Global:ProfileLoadStart = Get-Date

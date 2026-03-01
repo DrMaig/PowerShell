@@ -9,18 +9,22 @@
 #==============================================================================
 <#
 .SYNOPSIS
-    Collect-SystemSnapshot gathers a safe, non-sensitive system snapshot.
+    Export-SystemSnapshot gathers a safe, non-sensitive system snapshot.
 .DESCRIPTION
     Creates a timestamped folder with system inventory, network config, event summaries,
     and health data. No secrets, passwords, or PII beyond hostname/username are collected.
 .EXAMPLE
-    Collect-SystemSnapshot -OutputPath "$HOME\Desktop\snapshot"
+    Export-SystemSnapshot -OutputPath "$HOME\Desktop\snapshot"
 #>
 
-function Collect-SystemSnapshot {
+function Export-SystemSnapshot {
     <#
     .SYNOPSIS
         Gathers a comprehensive, non-sensitive system snapshot to a timestamped folder.
+    .DESCRIPTION
+        Creates a timestamped directory with system, hardware, network, and diagnostic
+        data exported as JSON files. Renamed from Collect-SystemSnapshot in v3.1.0
+        (backward-compat alias retained).
     .PARAMETER OutputPath
         Base output directory (a timestamped subfolder is created).
     .PARAMETER IncludeEventLogs
@@ -31,14 +35,14 @@ function Collect-SystemSnapshot {
         Collect-SystemSnapshot
         Collect-SystemSnapshot -OutputPath 'C:\Snapshots' -IncludeEventLogs -IncludeNetwork
     #>
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param(
         [string]$OutputPath = (Join-Path $Global:ProfileConfig.LogPath 'snapshots'),
         [switch]$IncludeEventLogs,
         [switch]$IncludeNetwork
     )
 
-    if (-not $PSCmdlet.ShouldProcess('System', 'Collect diagnostic snapshot')) { return }
+    if (-not $PSCmdlet.ShouldProcess('System', 'Export diagnostic snapshot')) { return }
 
     $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
     $snapDir = Join-Path $OutputPath "snapshot_$ts"
@@ -116,9 +120,12 @@ function Collect-SystemSnapshot {
         Write-ProfileLog "System snapshot saved to $snapDir" -Level INFO -Component "Snapshot"
         return $snapDir
     } catch {
-        Write-CaughtException -Context "Collect-SystemSnapshot" -ErrorRecord $_ -Component "Snapshot" -Level WARN
+        Write-CaughtException -Context "Export-SystemSnapshot" -ErrorRecord $_ -Component "Snapshot" -Level WARN
         return $null
     }
 }
+
+# Backward-compatibility alias for renamed function
+Set-Alias -Name Collect-SystemSnapshot -Value Export-SystemSnapshot -ErrorAction Ignore
 
 #endregion ADDED: DIAGNOSTICS AUTOMATION

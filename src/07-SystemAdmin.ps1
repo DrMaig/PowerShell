@@ -21,12 +21,17 @@ function Get-SystemInfo {
         Retrieves comprehensive system information.
     .DESCRIPTION
         Returns detailed information about the operating system, hardware,
-        and system configuration.
+        and system configuration. Windows-only (uses Win32_* CIM classes).
     .EXAMPLE
         Get-SystemInfo | Format-List
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-SystemInfo requires Windows (Win32_* CIM classes).'
+        return $null
+    }
 
     try {
         $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
@@ -78,10 +83,15 @@ function Get-DiskInfo {
         Retrieves disk information.
     .DESCRIPTION
         Returns information about logical disks including size, free space,
-        and usage percentages.
+        and usage percentages. Windows-only (uses Win32_LogicalDisk).
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-DiskInfo requires Windows (Win32_LogicalDisk CIM class).'
+        return @()
+    }
 
     try {
         Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue |
@@ -110,9 +120,15 @@ function Get-MemoryInfo {
         Retrieves memory information.
     .DESCRIPTION
         Returns detailed memory information including total, free, and used memory.
+        Windows-only (uses Win32_OperatingSystem and Win32_PhysicalMemory).
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-MemoryInfo requires Windows (Win32_* CIM classes).'
+        return $null
+    }
 
     try {
         $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
@@ -146,9 +162,15 @@ function Get-CPUInfo {
         Retrieves CPU information.
     .DESCRIPTION
         Returns detailed CPU information including architecture, cores, and speed.
+        Windows-only (uses Win32_Processor).
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-CPUInfo requires Windows (Win32_Processor CIM class).'
+        return $null
+    }
 
     try {
         $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue
@@ -186,9 +208,15 @@ function Get-GPUInfo {
         Retrieves GPU information.
     .DESCRIPTION
         Returns information about video controllers/GPUs.
+        Windows-only (uses Win32_VideoController).
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-GPUInfo requires Windows (Win32_VideoController CIM class).'
+        return @()
+    }
 
     try {
         Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
@@ -209,9 +237,15 @@ function Get-BIOSInfo {
         Retrieves BIOS information.
     .DESCRIPTION
         Returns detailed BIOS information including version and settings.
+        Windows-only (uses Win32_BIOS and Win32_ComputerSystem).
     #>
     [CmdletBinding()]
     param()
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-BIOSInfo requires Windows (Win32_BIOS CIM class).'
+        return $null
+    }
 
     try {
         $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
@@ -239,11 +273,17 @@ function Get-SystemHealth {
         Retrieves system health status.
     .DESCRIPTION
         Returns health information for disk, memory, and CPU.
+        Windows-only (delegates to Win32_* CIM-based functions and Get-Counter).
     .PARAMETER Quick
         Return quick summary only.
     #>
     [CmdletBinding()]
     param([switch]$Quick)
+
+    if (-not $IsWindows) {
+        Write-Warning 'Get-SystemHealth requires Windows.'
+        return $null
+    }
 
     try {
         $cpuInfo = Get-CPUInfo

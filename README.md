@@ -54,10 +54,15 @@ Unified wrappers for winget, chocolatey, scoop, npm, pnpm, yarn, pip, pipx, dotn
 - Code signing helper support
 
 ### 📝 Logging & Diagnostics
-Structured log levels, rotation, JSON monitoring entries, `Collect-SystemSnapshot`, `Test-ProfileHealth`, `Invoke-ProfileLint`.
+Structured log levels, rotation, JSON monitoring entries, `Export-SystemSnapshot`, `Test-ProfileHealth`, `Invoke-ProfileLint`.
 
 ### 🌍 Cross-Platform
 Windows/Linux/macOS adaptive behavior with platform guards and graceful degradation.
+
+All Windows-only functions (CIM-based system admin, performance counters, services,
+code signing, disk maintenance) include `$IsWindows` guards and return informative
+warnings on non-Windows platforms. Core utilities (networking, benchmarking, file
+operations, package management) work cross-platform.
 
 ### 🖧 Remote Management
 `Test-RemoteHost`, `Connect-RemoteHost`, `Invoke-RemoteCommand` with credential prompts and session cleanup.
@@ -151,7 +156,7 @@ Disable components by toggling feature flags or removing entries from the orches
 | Command | Description | Example |
 |---|---|---|
 | `Test-ProfileHealth` | Profile health checks | `Test-ProfileHealth` |
-| `Collect-SystemSnapshot` | Export diagnostics snapshot | `Collect-SystemSnapshot -WhatIf` |
+| `Export-SystemSnapshot` | Export diagnostics snapshot | `Export-SystemSnapshot -WhatIf` |
 | `Invoke-RemoteCommand` | Execute remote command | `Invoke-RemoteCommand -ComputerName srv01 -ScriptBlock { hostname }` |
 | `Get-RecentEvents` | Recent event log entries | `Get-RecentEvents -LogName System -MaxEvents 50` |
 
