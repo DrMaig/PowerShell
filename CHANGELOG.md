@@ -1,28 +1,26 @@
-## [2.1.0] - 2026-02-28
-### Fixed
-- Scoped $ProgressPreference to profile load only (was leaked globally)
-- Deferred Update-InstalledModulesCache (removed synchronous Get-InstalledModule on every load)
-- Eliminated duplicate argument-completer registration (Region 21 → no-op)
-- Added ValidateRange(1,65535) to Test-TcpPort -Port
-- Added ValidatePattern on Invoke-DiskMaintenance -DriveLetter
-- Added ShouldProcess guard to Optimize-System Clear-RecycleBin
-- Renamed $event → $monitorEntry (avoids automatic variable conflict)
-- Fixed unused $fixedContent in Invoke-ProfileLint -Fix
+## [3.0.0] - 2026-03-01
+
+### Changed
+- Refactored `Microsoft.PowerShell_profile.ps1` into a thin orchestrator that dot-sources 32 modular components from `src/`.
+- Preserved original region ordering by mapping each region to `src/XX-Name.ps1`.
+- Updated profile metadata to version `3.0.0` with Windows/Linux/macOS support note.
+- Replaced hard non-Windows bootstrap exit with reduced-feature loading behavior.
+- Promoted `Assert-ModuleAvailable` as primary function name and kept `Ensure-Module` alias for backward compatibility.
 
 ### Added
-- Region 24: Hardware Diagnostics (Invoke-SafeCimQuery, Get-HardwareSummary, Get-SmartDiskHealth, Get-BatteryHealth)
-- Region 25: Network Toolkit (Invoke-Traceroute, Get-ArpTable, Invoke-PortScan, Get-NicStatistics, Test-DnsResolution)
-- Region 26: Event & Log Helpers (Get-RecentEvents, Export-EventLogToJson, Get-EventLogSummary)
-- Region 27: Secure Remote Management (Connect-RemoteHost, Invoke-RemoteCommand, Remove-AllRemoteSessions)
-- Region 28: Monitoring & Alerting (Write-MonitorEvent, Test-ThresholdAlerts, Get-MonitorLog)
-- Region 29: Interactive Productivity (Show-CommandPalette, Find-ProfileCommand, Get-ContextSuggestions)
-- Region 30: Diagnostics Automation (Collect-SystemSnapshot)
-- Region 31: Testing & Linting (Invoke-ProfileLint, Test-ProfileScript, Invoke-ProfilePesterTests)
-- Region 32: Code Signing Guidance (Sign-ProfileScript)
-- Assert-ModuleAvailable alias for Ensure-Module
-- Pester test suite (50+ smoke tests)
+- `src/` modular component architecture (`01-Bootstrap.ps1` through `32-CodeSigning.ps1`).
+- `tests/` Pester suite:
+  - `Profile.Parse.Tests.ps1`
+  - `Profile.Functions.Tests.ps1`
+  - `Profile.Config.Tests.ps1`
+  - `Profile.Components.Tests.ps1`
+- Repository infrastructure files:
+  - `.gitignore`, `.editorconfig`, `.gitattributes`
+  - `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`
+  - `.github/workflows/lint.yml`
+  - `.github/ISSUE_TEMPLATE/bug_report.md`
+  - `.github/ISSUE_TEMPLATE/feature_request.md`
 
-### Rollback Notes
-- Copy Backups/Microsoft.PowerShell_profile.ps1 to workspace root
-- New regions 24-32 are additive; removing them has no effect on regions 1-23
-- $Global:ProfileConfig.AlertThresholds is new; removing it is safe
+### Notes
+- `profile.ps1` remains conda bootstrap only.
+- Optional integrations continue to fail soft when dependencies are unavailable.

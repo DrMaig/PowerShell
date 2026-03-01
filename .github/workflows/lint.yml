@@ -1,0 +1,56 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell
+        uses: PowerShell/PowerShell-For-GitHub-Actions@v1
+
+      - name: Parser validation
+        shell: pwsh
+        run: |
+          $allFiles = @('Microsoft.PowerShell_profile.ps1') + @(Get-ChildItem src/*.ps1 -File | ForEach-Object FullName)
+          $totalErrors = 0
+          foreach ($f in $allFiles) {
+              $e = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$e) > $null
+              if ($e) {
+                  $e | ForEach-Object { Write-Host "PARSE ERROR in $f line $($_.Extent.StartLineNumber): $($_.Message)" }
+                  $totalErrors += $e.Count
+              }
+          }
+          if ($totalErrors -gt 0) { exit 1 }
+
+      - name: Validate JSON config
+        shell: pwsh
+        run: |
+          Get-Content ./powershell.config.json -Raw | ConvertFrom-Json | Out-Null
+
+      - name: Install test modules
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Get-ChildItem -Path . -Include *.ps1 -Recurse -File |
+            ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error,Warning -Settings ./PSScriptAnalyzerSettings.psd1 }
+          if ($results) {
+            $results | Format-Table RuleName,Severity,ScriptName,Line,Message -AutoSize
+            exit 1
+          }
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Invoke-Pester ./tests -Output Detailed
