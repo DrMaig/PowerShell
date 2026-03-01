@@ -9,6 +9,7 @@
         'PSReviewUnusedParameter',
         'PSUseBOMForUnicodeEncodedFile',
         'PSAvoidUsingInvokeExpression',
-        'PSUseShouldProcessForStateChangingFunctions'
+        'PSUseShouldProcessForStateChangingFunctions',
+        'PSAvoidUsingConvertToSecureStringWithPlainText'
     )
 }
