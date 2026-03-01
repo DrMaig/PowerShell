@@ -53,7 +53,9 @@ function Invoke-ProfileLint {
     }
     if (-not $profilePath -or -not (Test-Path $profilePath)) {
         # Final fallback: the script file that defined this function
-        $profilePath = Join-Path (Split-Path $PSCommandPath) 'Microsoft.PowerShell_profile.ps1'
+        $profileRootVar = Get-Variable -Scope Script -Name ProfileRoot -ErrorAction Ignore
+        $profileRoot = if ($profileRootVar -and $profileRootVar.Value) { $profileRootVar.Value } else { Split-Path -Parent $PSScriptRoot }
+        $profilePath = Join-Path $profileRoot 'Microsoft.PowerShell_profile.ps1'
     }
     if (-not (Test-Path $profilePath)) {
         Write-Host "Profile script not found at expected path." -ForegroundColor Yellow
@@ -109,7 +111,9 @@ function Test-ProfileScript {
     $profilePath = $PROFILE.CurrentUserAllHosts
     if (-not $profilePath -or -not (Test-Path $profilePath)) { $profilePath = $PROFILE.CurrentUserCurrentHost }
     if (-not $profilePath -or -not (Test-Path $profilePath)) {
-        $profilePath = Join-Path (Split-Path $PSCommandPath) 'Microsoft.PowerShell_profile.ps1'
+        $profileRootVar = Get-Variable -Scope Script -Name ProfileRoot -ErrorAction Ignore
+        $profileRoot = if ($profileRootVar -and $profileRootVar.Value) { $profileRootVar.Value } else { Split-Path -Parent $PSScriptRoot }
+        $profilePath = Join-Path $profileRoot 'Microsoft.PowerShell_profile.ps1'
     }
     if (-not (Test-Path $profilePath)) {
         return [PSCustomObject]@{ Valid = $false; Errors = @('Profile script not found'); Path = $profilePath }

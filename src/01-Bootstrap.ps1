@@ -34,9 +34,15 @@ $Global:ProfileState = [ordered]@{
     LastChecked = $null
 }
 
-# Initialize ProfileStats
-$Global:ProfileStats = [ordered]@{
-    ModulesLoaded = 0
+# Initialize/normalize ProfileStats without replacing orchestrator schema
+if (-not ($Global:ProfileStats -is [System.Collections.IDictionary])) {
+    $Global:ProfileStats = [ordered]@{}
+}
+if (-not $Global:ProfileStats.Contains('ModulesLoaded')) {
+    $Global:ProfileStats.ModulesLoaded = 0
+}
+if (-not $Global:ProfileStats.Contains('ComponentLoadTimes') -or -not ($Global:ProfileStats.ComponentLoadTimes -is [System.Collections.IDictionary])) {
+    $Global:ProfileStats.ComponentLoadTimes = [ordered]@{}
 }
 
 # Ensure running PowerShell 7.5 or higher

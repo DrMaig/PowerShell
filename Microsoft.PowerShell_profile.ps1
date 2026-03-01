@@ -1,4 +1,4 @@
-#requires -Version 7.5
+﻿#requires -Version 7.5
 #==============================================================================
 # ⚡ PowerShell Pro Profile - Thin Orchestrator
 #==============================================================================
@@ -60,6 +60,14 @@ foreach ($component in $script:ComponentOrder) {
     try {
         . $componentPath
         $sw.Stop()
+
+        if (-not ($Global:ProfileStats -is [System.Collections.IDictionary])) {
+            $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0; ComponentLoadTimes = [ordered]@{} }
+        }
+        if (-not $Global:ProfileStats.Contains('ComponentLoadTimes') -or -not ($Global:ProfileStats.ComponentLoadTimes -is [System.Collections.IDictionary])) {
+            $Global:ProfileStats.ComponentLoadTimes = [ordered]@{}
+        }
+
         $Global:ProfileStats.ComponentLoadTimes[$component] = [math]::Round($sw.Elapsed.TotalMilliseconds, 2)
 
         if (Get-Command Write-ProfileLog -ErrorAction Ignore) {
@@ -67,6 +75,14 @@ foreach ($component in $script:ComponentOrder) {
         }
     } catch {
         $sw.Stop()
+
+        if (-not ($Global:ProfileStats -is [System.Collections.IDictionary])) {
+            $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0; ComponentLoadTimes = [ordered]@{} }
+        }
+        if (-not $Global:ProfileStats.Contains('ComponentLoadTimes') -or -not ($Global:ProfileStats.ComponentLoadTimes -is [System.Collections.IDictionary])) {
+            $Global:ProfileStats.ComponentLoadTimes = [ordered]@{}
+        }
+
         $Global:ProfileStats.ComponentLoadTimes[$component] = [math]::Round($sw.Elapsed.TotalMilliseconds, 2)
         if (Get-Command Write-CaughtException -ErrorAction Ignore) {
             Write-CaughtException -Context "Component '$component' load failure" -ErrorRecord $_

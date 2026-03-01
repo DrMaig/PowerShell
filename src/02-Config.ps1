@@ -198,7 +198,13 @@ function Get-ProfileConfigPath {
     [CmdletBinding()]
     param()
 
-    return (Join-Path $PSScriptRoot 'powershell.config.json')
+    $profileRootVar = Get-Variable -Scope Script -Name ProfileRoot -ErrorAction Ignore
+    if ($profileRootVar -and $profileRootVar.Value) {
+        return (Join-Path $profileRootVar.Value 'powershell.config.json')
+    }
+
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    return (Join-Path $repoRoot 'powershell.config.json')
 }
 
 function Import-ProfileRuntimeConfig {

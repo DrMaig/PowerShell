@@ -323,3 +323,8 @@ Update-ProfileModules
 Show-ProfileSummary
 notepad $profile
 flushdns
+get-error -Debug
+get-error -verbose
+get-command -CommandType function -listimported *
+ Show-CommandPalette
+ Get-HardwareSummary

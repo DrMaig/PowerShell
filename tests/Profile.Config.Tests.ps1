@@ -1,6 +1,7 @@
 Describe 'Profile config' {
     BeforeAll {
         $repoRoot = Split-Path -Parent $PSScriptRoot
+        $script:ProfileRoot = $repoRoot
         $configPath = Join-Path $repoRoot 'powershell.config.json'
         $script:Config = Get-Content $configPath -Raw | ConvertFrom-Json
         . (Join-Path $repoRoot 'src/02-Config.ps1')

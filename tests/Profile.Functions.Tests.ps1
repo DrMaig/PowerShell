@@ -1,9 +1,17 @@
+$script:ExpectedFunctions = @(
+    'Test-Admin','Test-ProfileInteractive','Write-ProfileLog','Write-CaughtException',
+    'Test-Environment','Assert-ModuleAvailable','Get-SystemInfo','Get-DiskInfo','Get-MemoryInfo',
+    'Get-CPUInfo','Test-TcpPort','Get-LocalIP','Get-PublicIP','Set-DnsProfile','Optimize-System',
+    'Test-ProfileHealth','Get-TopProcesses','Get-HardwareSummary','Invoke-Traceroute',
+    'Get-RecentEvents','Invoke-RemoteCommand','Collect-SystemSnapshot','Invoke-ProfileLint','Sign-ProfileScript'
+)
+
 BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     function Write-ProfileLog { param([string]$Message,[string]$Level='INFO',[string]$Component='Tests') }
     function Write-CaughtException { param([string]$Context,[object]$ErrorRecord) }
     $Global:ProfileState = [ordered]@{ IsWindows = $IsWindows; IsLinux = $IsLinux; IsMacOS = $IsMacOS; Notes = @() }
-    $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0 }
+    $Global:ProfileStats = [ordered]@{ ModulesLoaded = 0; ComponentLoadTimes = [ordered]@{} }
     $Global:ProfileConfig = [ordered]@{
         StartupMode = 'minimal'
         ShowWelcome = $false
@@ -17,13 +25,6 @@ BeforeAll {
         . $_.FullName
     }
 
-    $script:ExpectedFunctions = @(
-        'Test-Admin','Test-ProfileInteractive','Write-ProfileLog','Write-CaughtException',
-        'Test-Environment','Assert-ModuleAvailable','Get-SystemInfo','Get-DiskInfo','Get-MemoryInfo',
-        'Get-CPUInfo','Test-TcpPort','Get-LocalIP','Get-PublicIP','Set-DnsProfile','Optimize-System',
-        'Test-ProfileHealth','Get-TopProcesses','Get-HardwareSummary','Invoke-Traceroute',
-        'Get-RecentEvents','Invoke-RemoteCommand','Collect-SystemSnapshot','Invoke-ProfileLint','Sign-ProfileScript'
-    )
 }
 
 Describe 'Profile functions' {

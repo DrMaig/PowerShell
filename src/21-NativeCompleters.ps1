@@ -25,7 +25,9 @@ function Initialize-NativeToolCompleters {
     [CmdletBinding()]
     param()
 
-    $nativeCompleterScriptPath = Join-Path $PSScriptRoot 'Scripts\Initialize-NativeToolCompleters.ps1'
+    $profileRootVar = Get-Variable -Scope Script -Name ProfileRoot -ErrorAction Ignore
+    $profileRoot = if ($profileRootVar -and $profileRootVar.Value) { $profileRootVar.Value } else { Split-Path -Parent $PSScriptRoot }
+    $nativeCompleterScriptPath = Join-Path $profileRoot 'Scripts\Initialize-NativeToolCompleters.ps1'
     if (-not (Test-Path -LiteralPath $nativeCompleterScriptPath)) {
         Write-ProfileLog "Native completer script not found at '$nativeCompleterScriptPath'" -Level WARN -Component "Completions"
         return $false
