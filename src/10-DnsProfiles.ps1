@@ -101,6 +101,10 @@ function Set-DnsProfile {
         return $false
     }
 
+    if (-not $PSCmdlet.ShouldProcess(($targets -join ', '), "Apply DNS profile '$Name'")) {
+        return $false
+    }
+
     $ok = $true
     foreach ($a in $targets) {
         if ($dnsProfile.Dhcp -eq $true) {
@@ -185,6 +189,9 @@ function Use-BestDns {
     }
 
     Write-Host "Best DNS: $($best.Name) ($($best.LatencyMs) ms)" -ForegroundColor Cyan
+    if (-not $PSCmdlet.ShouldProcess(($InterfaceAlias ?? 'All adapters'), "Apply best DNS profile '$($best.Name)'")) {
+        return $false
+    }
     return Set-DnsProfile -Name $best.Name -InterfaceAlias $InterfaceAlias -RestartAdapter:$RestartAdapter -FlushDns:$FlushDns
 }
 

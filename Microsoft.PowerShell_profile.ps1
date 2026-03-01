@@ -28,7 +28,7 @@ if ($env:TERM_PROGRAM -eq "vscode") {
             . $vscodeShellIntegration
         }
     } catch {
-        # VS Code integration is optional; continue without hard failure.
+        Write-Verbose "VS Code shell integration unavailable: $($_.Exception.Message)"
     }
 }
 

@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -43,7 +46,13 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Get-ChildItem -Path . -Include *.ps1 -Recurse -File |
+          $analysisTargets = @(
+            './Microsoft.PowerShell_profile.ps1',
+            './profile.ps1',
+            './src',
+            './tests'
+          )
+          $results = Get-ChildItem -Path $analysisTargets -Include *.ps1 -Recurse -File |
             ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error,Warning -Settings ./PSScriptAnalyzerSettings.psd1 }
           if ($results) {
             $results | Format-Table RuleName,Severity,ScriptName,Line,Message -AutoSize

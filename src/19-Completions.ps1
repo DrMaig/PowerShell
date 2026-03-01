@@ -398,7 +398,7 @@ Register-ArgumentCompleter -CommandName Set-DnsProfile -ParameterName Name -Scri
             }
         }
     } catch {
-        # non-blocking completer
+        Write-ProfileLog "DNS profile completion initialization failed: $($_.Exception.Message)" -Level DEBUG -Component "Completions"
     }
 }
 

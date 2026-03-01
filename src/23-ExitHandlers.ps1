@@ -40,7 +40,7 @@ if (-not $existingSub) {
             try {
                 & $action
             } catch {
-                # Best-effort exit cleanup; avoid Write-ProfileLog here as log file may already be closed
+                Write-Verbose "Exit action failed: $($_.Exception.Message)"
             }
         }
     } | Out-Null
