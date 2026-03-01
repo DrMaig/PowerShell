@@ -1,0 +1,94 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "PowerShell: Parse Check Profile",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "$e=$null; [System.Management.Automation.Language.Parser]::ParseFile('${workspaceFolder}/Microsoft.PowerShell_profile.ps1',[ref]$null,[ref]$e) > $null; if($e){$e | Format-List; exit 1} else {'parse ok'}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Run Pester Wrapper",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-File",
+                "${workspaceFolder}/Scripts/run_pester.ps1"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Invoke Pester (Recommended)",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop; Invoke-Pester -Path '${workspaceFolder}/Microsoft.PowerShell_profile.Tests.ps1' -Output Detailed"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: ScriptAnalyzer (Best Effort)",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "try { Import-Module PSScriptAnalyzer -ErrorAction Stop; Invoke-ScriptAnalyzer -Path '${workspaceFolder}/Microsoft.PowerShell_profile.ps1' -Settings '${workspaceFolder}/PSScriptAnalyzerSettings.psd1' -Severity Error,Warning | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize } catch { 'PSScriptAnalyzer unavailable: ' + $_.Exception.Message }"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Run PSScriptAnalyzer (Test)",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Import-Module PSScriptAnalyzer -ErrorAction Stop; $issues = Invoke-ScriptAnalyzer -Path '${workspaceFolder}/Microsoft.PowerShell_profile.ps1' -Settings '${workspaceFolder}/PSScriptAnalyzerSettings.psd1' -Severity Error,Warning; if($issues){$issues | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize; exit 1} else {'analyzer ok'}"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Validate powershell.config.json",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Get-Content '${workspaceFolder}/powershell.config.json' -Raw | ConvertFrom-Json | Out-Null; 'config ok'"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Pre-Debug Profile Checks",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "PowerShell: Parse Check Profile",
+                "PowerShell: Validate powershell.config.json"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "PowerShell: Quality Gate (Parse + Analyzer + Pester)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "PowerShell: Parse Check Profile",
+                "PowerShell: Run PSScriptAnalyzer (Test)",
+                "PowerShell: Invoke Pester (Recommended)"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        }
+    ]
+}
