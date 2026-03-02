@@ -328,3 +328,37 @@ get-error -verbose
 get-command -CommandType function -listimported *
  Show-CommandPalette
  Get-HardwareSummary
+get-error -Debug
+get-command -CommandType function -listimported *
+ Test-Environment
+]Update-AllPackages
+Update-AllPackages
+Get-ServiceHealth
+Optimize-System
+Clear-TempFiles
+"C:\Users\maig3\Downloads\Compressed\WinDivert-2.2.2-Source\WinDivert-2.2.2\release-build.sh"
+. /release-build.sh
+. msvc-build.bat
+. /msvc-build.bat
+. /.msvc-build.bat
+msvc-build.bat
+ls
+cd msbuild
+ls
+cd current
+ls
+..
+cd Microsoft
+ls
+cd Nuget
+ls
+cd 18.0
+ls
+cd
+. "C:\Users\maig3\Downloads\Compressed\WinDivert-2.2.2-Source\WinDivert-2.2.2\release-build.sh"
+. "C:\Users\maig3\Downloads\Compressed\WinDivert-2.2.2-Source\WinDivert-2.2.2\msvc-build.bat"
+get-command -CommandType function -listimported *
+ Initialize-NetworkProfiles
+Initialize-CommandPredictorModules
+ipconfig /flushdns
+Restart-NetworkAdapter
