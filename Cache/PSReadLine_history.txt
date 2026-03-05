@@ -362,3 +362,133 @@ get-command -CommandType function -listimported *
 Initialize-CommandPredictorModules
 ipconfig /flushdns
 Restart-NetworkAdapter
+get-command -CommandType function -listimported *
+Restart-NetworkAdapter
+Invoke-PortScan
+Invoke-Traceroute
+Initialize-NetworkProfiles
+Initialize-NetworkProfiles DHCP
+Invoke-SafeCimQuery
+Invoke-SafeCimQuery -classname Wi-fi
+Get-NicStatistics
+get-networking
+Get-Command -module nettcpip
+Reset-NetworkStack
+Reset-NetworkAdapter
+Reset-NetworkAdapter -interface wi-fi
+Get-NetTCPConnection
+Get-Networking
+Show-IpInfo
+Get-NetRoute
+Invoke-NetworkScan
+Invoke-NetworkScan -scantype deep
+Get-Networking
+Resolve-DNSName
+Get-DNSClientCache
+Clear-DNSClientCache
+Open-HostsFile
+Get-NICConfig
+Test-Netconnection
+Invoke-Ethr
+Invoke-Ethr -help
+Invoke-Ethr -ipv4
+Initialize-NetworkProfiles -debug
+invoke-fzf
+ Get-HardwareSummary
+ Get-bcstatus
+Get-ServiceHealth
+get-command -CommandType function -listimported *
+ Test-ThresholdAlerts
+Install-DevPackage -Manager dotnet
+Install-DevPackage -Manager dotnet -global
+npm
+npm update
+npm doctor
+npm update npn
+npm update npm
+npm audit
+conda activate pydev
+conda list
+ & {`
+pip list --outdated --format=freeze | ForEach-Object {}`
+}
+    $pkg = ($_ -split '==')[0]
+    pip install --upgrade $pkg
+ & {`
+pip list --outdated --format=freeze | ForEach-Object {}}
+    $pkg = ($_ -split '==')[0]
+    pip install --upgrade $pkg
+Reset-NetworkStack
+Reset-NetworkStack -debug
+Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase
+sfc /scannow`
+Dism.exe /online /Cleanup-Image /restorehealth`
+sfc /scannow
+get-command -CommandType function -listimported
+Update-ProfileModules
+optimize
+ Get-NetworkSnapshot
+Get-MonitorLog
+Update-AllPackages
+ Get-NetworkAdapters
+optimize
+Optimize-System
+Get-ArpTable
+flushdns
+ Get-DnsConfig
+choco upgrade all -y
+choco --debug
+choco --help
+scoop cleanup *
+get-command -CommandType function -listimported
+updatemods
+Test-TcpPort
+Test-ProfileScript
+ Test-ProfileHealth
+Test-DnsResolution
+Show-ProfileDiagnostics
+Sign-ProfileScript
+Show-CommandPalette
+ Get-BatteryHealth
+ Get-RemoteSessions
+Remove-AllRemoteSessions
+ Clear-DnsCache
+ Get-LinkSpeed
+Test-Internet
+Get-LocalIP
+ Get-PublicIP
+ Get-PerfSnapshot
+ Invoke-PortScan
+ Invoke-PortScan -ports 1-1000000
+ Invoke-PortScan
+Invoke-ProfileLint
+ Invoke-ProfilePesterTests
+ Show-ProfileDiagnostics
+Collect-SystemSnapshot
+ Clear-TempFiles
+Measure-Benchmark
+Test-ThresholdAlerts
+Get-SmartDiskHealth
+ Get-ScheduledTasksSummary
+Get-ServiceHealth
+Get-MonitorLog
+Get-EventLogSummary
+ Get-RecentEvents
+find-module netTCPIP
+search-module netTCPIP
+search-package netTCPIP
+find-package netTCPIP
+Netcpip
+get-module
+get-command -listimported *
+Get-MaskingSet
+Get-InitiatorId
+ Clear-CimQueryCache
+ touch.ps1
+supermodel.ps1
+ Update-Help
+ipconfig
+get-dnsclientserveraddress
+Get-DedupProperties
+Get-DeliveryOptimizationLog
+updateall
