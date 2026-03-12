@@ -492,3 +492,16 @@ get-dnsclientserveraddress
 Get-DedupProperties
 Get-DeliveryOptimizationLog
 updateall
+sfc /scannow
+Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase
+sfc /scannow
+Optimize-System
+ls
+. /cleanup.ps1
+./clenup.ps1
+./cleanup.ps1
+flushdns
+get-command -CommandType function -listimported *
+Restart-NetworkAdapter
+Test-ThresholdAlerts
+ Optimize-System
