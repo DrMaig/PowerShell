@@ -919,3 +919,6 @@ npm update
 cd
 Clear-TempFiles
 optimize
+gh repo clone DrMaig/Win-10-Optimization-Script
+get-command -CommandType function -listimported *
+Get-ArpTable

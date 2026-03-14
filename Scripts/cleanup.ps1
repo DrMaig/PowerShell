@@ -1,3125 +1,3864 @@
-<<<<<<< HEAD
-#requires -Version 5.1
 <#
 .SYNOPSIS
-Safe, hardware-aware Windows 10 cleanup and optimization script with strong guardrails.
+Optimize-Windows10.ps1 performs safe, reversible Windows 10 optimization in ordered modules.
 
 .DESCRIPTION
-Optimize-Windows performs conservative maintenance, cleanup, diagnostics, and optional optimization tasks with
-administrator enforcement, strict OS validation, dry-run support, interactive confirmation flow, reversible backups,
-manifest generation, and detailed reporting.
-
-Target OS: Windows 10 Pro 64-bit 22H2 build 19045.7058.
-
-Safety notes:
-- Never touches protected user data stores (credentials, browser profiles, search index data, account-sensitive stores).
-- Exports manifests before removals and backups before destructive operations where possible.
-- Does not disable security-critical services by default.
+This script is generated in module-by-module chunks. It enforces strict safety gates, logs in UTC,
+and preserves sensitive user data. System validation (DISM/SFC) is reserved for script closure and
+must run last after all cleanup and optimization modules.
 
 .PARAMETER DryRun
-Reports all planned actions without applying changes.
+Lists planned actions and performs no system changes. Takes precedence over all action switches.
+
+.PARAMETER AutoApprove
+Skips interactive confirmations. Does not skip backups or restore point requirements.
 
 .PARAMETER Force
-Runs non-interactively (skips prompts) while still respecting safety gates.
+Suppresses non-critical warnings only. Does not bypass mandatory safety rules.
 
-.PARAMETER Interactive
-Enables interactive confirmations for major destructive steps. Interactive mode is default unless -Force is used.
+.PARAMETER RemoveDuplicateDrivers
+Enables duplicate driver removal flow (disabled by default).
 
-.PARAMETER OverrideOSCheck
-Allows running on non-target Windows builds after warning.
+.PARAMETER PreviewDriversToRemove
+Shows driver deduplication preview only. Performs no changes.
 
-.PARAMETER OverrideSafety
-Allows continuing when restore point cannot be created or safety prerequisites are degraded.
+.PARAMETER IgnoreOSCheck
+Skips OS build validation and logs a warning.
 
-.PARAMETER TempAgeDays
-Minimum age (in days) for temp files eligible for deletion.
+.PARAMETER SkipRestorePoint
+Skips restore point creation and logs a warning.
 
-.PARAMETER RemovePrefetch
-Opt-in prefetch cleanup. Disabled by default.
+.PARAMETER LogPath
+Directory for UTC log output.
 
-.PARAMETER RebuildSearchIndex
-Opt-in search index rebuild request (does not delete index files).
+.PARAMETER BackupPath
+Directory for backup artifacts.
 
-.PARAMETER RecommendTelemetryChanges
-Shows conservative telemetry reduction recommendations and optionally applies with explicit consent.
+.PARAMETER SelfTest
+Runs read-only preflight diagnostics, prints guidance, and writes a self-test report JSON file.
 
-.PARAMETER OptimizationProfile
-Optimization recommendation profile: Gaming, Office, Development.
-Alias: -Profile
+.PARAMETER OptimizeStartupItems
+Enables startup-item optimization workflow in Module 5. Disabled by default for safety.
 
-.PARAMETER Aggressive
-Enables more aggressive performance tweaks (still confirmation-gated).
+.PARAMETER StartupItemAllowList
+List of startup item names eligible for disable operations when OptimizeStartupItems is specified.
 
-.PARAMETER RemoveBloat
-Removes safe bloatware candidates with confirmation.
+.PARAMETER StartupItemAllowListIsRegex
+Treats StartupItemAllowList values as regex patterns when set. By default, matching is case-insensitive exact name.
 
-.PARAMETER PreviewBloatRemoval
-Shows bloatware candidates without removing.
+.PARAMETER CleanupAgeDays
+Age threshold for orphaned temporary file cleanup.
 
-.PARAMETER AutoUpdateDrivers
-Attempts driver updates from Windows Update channel only after backup and confirmation.
-
-.PARAMETER AllowListPath
-Explicit allow-list paths for user content areas otherwise protected from deletion.
+.PARAMETER VisualEffectsPreset
+Visual effects preset: Balanced, Performance, or MaxPerformance.
 
 .EXAMPLE
-.\Optimize-Windows.ps1 -DryRun
-
-.EXAMPLE
-.\Optimize-Windows.ps1 -Force -AutoUpdateDrivers -RemoveBloat
-
-.EXAMPLE
-.\Optimize-Windows.ps1 -OptimizationProfile Gaming -Aggressive
+.\Optimize-Windows10.ps1 -DryRun -Verbose
 #>
-[CmdletBinding()]
+
+# Changelog
+# 2026-03-13  Initial generated baseline (Phase 2, Modules 1-4)
+#
+# Author: GitHub Copilot (GPT-5.3-Codex)
+# Version: 1.0.0
+# Requires: Windows PowerShell 5.1
+
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
 	[switch]$DryRun,
+	[switch]$AutoApprove,
 	[switch]$Force,
-	[switch]$Interactive,
-	[switch]$OverrideOSCheck,
-	[switch]$OverrideSafety,
-	[ValidateRange(1, 365)]
-	[int]$TempAgeDays = 7,
-	[switch]$RemovePrefetch,
-	[switch]$RebuildSearchIndex,
-	[switch]$RecommendTelemetryChanges,
-	[Alias('Profile')]
-	[ValidateSet('Gaming', 'Office', 'Development')]
-	[string]$OptimizationProfile = 'Office',
-	[switch]$Aggressive,
-	[switch]$RemoveBloat,
-	[switch]$PreviewBloatRemoval,
-	[switch]$AutoUpdateDrivers,
-	[string[]]$AllowListPath = @()
+	[switch]$RemoveDuplicateDrivers,
+	[switch]$PreviewDriversToRemove,
+	[switch]$IgnoreOSCheck,
+	[switch]$SkipRestorePoint,
+	[switch]$SelfTest,
+	[string]$LogPath = 'C:\ProgramData\OptimizeWindows\Logs\',
+	[string]$BackupPath = 'C:\ProgramData\OptimizeWindows\Backups\',
+	[switch]$OptimizeStartupItems,
+	[string[]]$StartupItemAllowList = @(),
+	[switch]$StartupItemAllowListIsRegex,
+	[ValidateRange(1, 3650)]
+	[int]$CleanupAgeDays = 7,
+	[ValidateSet('Balanced', 'Performance', 'MaxPerformance')]
+	[string]$VisualEffectsPreset = 'Balanced'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:PreClosureFatalMessage = $null
 
-$script:RunId = [guid]::NewGuid().ToString()
-$script:StartTime = Get-Date
-$script:CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$script:Machine = $env:COMPUTERNAME
-$script:ScriptRoot = Split-Path -Parent $PSCommandPath
-$script:Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$script:LogRoot = Join-Path $script:ScriptRoot 'Logs'
-$script:RunRoot = Join-Path $script:LogRoot "OptimizeRun_$script:Stamp`_$($script:RunId.Substring(0,8))"
-$script:ManifestRoot = Join-Path $script:RunRoot 'Manifests'
-$script:BackupRoot = Join-Path $script:RunRoot 'Backups'
-$script:ReportPath = Join-Path $script:RunRoot 'summary_report.json'
-$script:LogPath = Join-Path $script:RunRoot 'optimize.log'
-if ($Force) {
-	$script:IsInteractiveMode = $false
-}
-elseif ($PSBoundParameters.ContainsKey('Interactive')) {
-	$script:IsInteractiveMode = [bool]$Interactive
-}
-else {
-	$script:IsInteractiveMode = $true
-}
-$script:ExitCode = 0
+#region Core Utilities
 
-$script:TargetOS = [ordered]@{
-	ProductName = 'Windows 10 Pro'
-	BuildNumber = 19045
-	Ubr = 7058
-	Architecture = '64-bit'
-	ReleaseId = '22H2'
-}
-
-$script:ProtectedRoots = @(
-	"$env:USERPROFILE\Documents",
-	"$env:USERPROFILE\Pictures",
-	"$env:USERPROFILE\Videos",
-	"$env:USERPROFILE\Desktop",
-	"$env:USERPROFILE\Downloads",
-	"$env:APPDATA",
-	"$env:LOCALAPPDATA\Packages",
-	"$env:USERPROFILE\AppData\Roaming\Microsoft\Credentials",
-	"$env:LOCALAPPDATA\Microsoft\Credentials",
-	"$env:LOCALAPPDATA\Microsoft\Edge\User Data",
-	"$env:LOCALAPPDATA\Google\Chrome\User Data",
-	"$env:APPDATA\Mozilla\Firefox\Profiles",
-	"$env:PROGRAMDATA\Microsoft\Search"
-)
-
-$script:SafeUserTempRoots = @(
-	"$env:LOCALAPPDATA\Temp",
-	"$env:SystemRoot\Temp",
-	"$env:TEMP"
-)
-
-$script:EssentialServices = @(
-	'WinDefend','WdNisSvc','Sense','SecurityHealthService','MpsSvc','BFE','LanmanWorkstation','LanmanServer',
-	'Dhcp','Dnscache','NlaSvc','Netprofm','Netman','WlanSvc','RpcSs','EventLog','PlugPlay','ProfSvc','SamSs',
-	'LSM','TermService','WSearch','W32Time','wuauserv','UsoSvc','BITS','CryptSvc','TrustedInstaller','Schedule'
-)
-
-$script:Result = [ordered]@{
-	RunId = $script:RunId
-	StartedAt = $script:StartTime
-	EndedAt = $null
-	User = $script:CurrentUser
-	Machine = $script:Machine
-	DryRun = [bool]$DryRun
-	Force = [bool]$Force
-	Interactive = [bool]$script:IsInteractiveMode
-	Profile = $OptimizationProfile
-	Aggressive = [bool]$Aggressive
-	Hardware = $null
-	ActionsPerformed = New-Object System.Collections.Generic.List[string]
-	ActionsSkipped = New-Object System.Collections.Generic.List[string]
-	ActionsFailed = New-Object System.Collections.Generic.List[string]
-	FilesRemoved = New-Object System.Collections.Generic.List[string]
-	ServicesChanged = New-Object System.Collections.Generic.List[object]
-	DriversBackedUp = New-Object System.Collections.Generic.List[string]
-	DriversRemoved = New-Object System.Collections.Generic.List[string]
-	SfcResult = $null
-	DismResult = $null
-	Recommendations = New-Object System.Collections.Generic.List[string]
-	BackupArtifacts = New-Object System.Collections.Generic.List[string]
-	ManifestArtifacts = New-Object System.Collections.Generic.List[string]
-}
-
-function Initialize-RunFolders {
-	New-Item -Path $script:RunRoot -ItemType Directory -Force | Out-Null
-	New-Item -Path $script:ManifestRoot -ItemType Directory -Force | Out-Null
-	New-Item -Path $script:BackupRoot -ItemType Directory -Force | Out-Null
-}
-
-function Write-Log {
-	param(
-		[Parameter(Mandatory)][string]$Message,
-		[ValidateSet('INFO','WARN','ERROR','SUCCESS','DEBUG')]
-		[string]$Level = 'INFO',
-		[string]$Category = 'General'
-	)
-
-	$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
-	$line = "[$ts] [$Level] [Run:$script:RunId] [User:$script:CurrentUser] [Host:$script:Machine] [$Category] $Message"
-	Add-Content -Path $script:LogPath -Value $line
-	if ($Level -in @('ERROR','WARN')) {
-		Write-Host $line -ForegroundColor Yellow
-	}
-	elseif ($Level -eq 'SUCCESS') {
-		Write-Host $line -ForegroundColor Green
-	}
-	else {
-		Write-Host $line
-	}
-}
-
-function Add-ActionResult {
-	param(
-		[Parameter(Mandatory)][string]$Action,
-		[ValidateSet('Performed','Skipped','Failed')]
-		[string]$Status,
-		[string]$Reason
-	)
-
-	switch ($Status) {
-		'Performed' { $script:Result.ActionsPerformed.Add($Action) }
-		'Skipped' {
-			$skippedText = $Action
-			if ($Reason) {
-				$skippedText = "$Action ($Reason)"
-			}
-			$script:Result.ActionsSkipped.Add($skippedText)
-		}
-		'Failed' {
-			$failedText = $Action
-			if ($Reason) {
-				$failedText = "$Action ($Reason)"
-			}
-			$script:Result.ActionsFailed.Add($failedText)
-			if ($script:ExitCode -lt 1) { $script:ExitCode = 1 }
-		}
-	}
-}
-
-function Test-IsAdministrator {
-	try {
-		$id = [Security.Principal.WindowsIdentity]::GetCurrent()
-		$principal = [Security.Principal.WindowsPrincipal]::new($id)
-		return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-	}
-	catch {
-		Write-Log -Message "Failed to evaluate admin role: $($_.Exception.Message)" -Level 'ERROR' -Category 'Preflight'
-		return $false
-	}
-}
-
-function Assert-Administrator {
-	if (-not (Test-IsAdministrator)) {
-		Write-Log -Message 'Administrator privileges are required. Re-run from an elevated PowerShell session.' -Level 'ERROR' -Category 'Preflight'
-		$script:ExitCode = 2
-		throw 'Not elevated.'
-	}
-}
-
-function Get-OsFacts {
-	$os = Get-CimInstance Win32_OperatingSystem
-	$cs = Get-CimInstance Win32_ComputerSystem
-	$cv = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-
-	[ordered]@{
-		Caption = $os.Caption
-		BuildNumber = [int]$os.BuildNumber
-		Ubr = [int]$cv.UBR
-		ProductName = [string]$cv.ProductName
-		DisplayVersion = [string]$cv.DisplayVersion
-		Architecture = [string]$os.OSArchitecture
-		DomainRole = [int]$cs.DomainRole
-	}
-}
-
-function Assert-OsCompatibility {
-	$facts = Get-OsFacts
-	$isMatch = $true
-	if ($facts.ProductName -notlike '*Windows 10 Pro*') { $isMatch = $false }
-	if ($facts.BuildNumber -ne $script:TargetOS.BuildNumber) { $isMatch = $false }
-	if ($facts.Ubr -ne $script:TargetOS.Ubr) { $isMatch = $false }
-	if ($facts.Architecture -notlike '*64*') { $isMatch = $false }
-	if ($facts.DisplayVersion -ne $script:TargetOS.ReleaseId) { $isMatch = $false }
-
-	if (-not $isMatch) {
-		$msg = "OS mismatch. Required: Windows 10 Pro 22H2 build 19045.7058 x64. Detected: $($facts.ProductName) $($facts.DisplayVersion) build $($facts.BuildNumber).$($facts.Ubr) $($facts.Architecture)."
-		if ($OverrideOSCheck) {
-			Write-Log -Message "$msg Continuing due to -OverrideOSCheck." -Level 'WARN' -Category 'Preflight'
-			$script:Result.Recommendations.Add('Ran with OS override; review results carefully for compatibility.')
-		}
-		else {
-			Write-Log -Message $msg -Level 'ERROR' -Category 'Preflight'
-			$script:ExitCode = 2
-			throw 'OS compatibility check failed.'
-		}
-	}
-	else {
-		Write-Log -Message 'Target OS check passed.' -Level 'SUCCESS' -Category 'Preflight'
-	}
-}
-
-function Confirm-Step {
-	param(
-		[Parameter(Mandatory)][string]$Title,
-		[string]$Warning,
-		[switch]$Permanent
-	)
-
-	if ($Force) {
-		Write-Log -Message "Auto-confirmed due to -Force: $Title" -Category 'Confirm'
-		return $true
-	}
-
-	if (-not $script:IsInteractiveMode) {
-		Write-Log -Message "Non-interactive mode without -Force: skipping '$Title'." -Level 'WARN' -Category 'Confirm'
-		return $false
-	}
-
-	$prompt = $Title
-	if ($Permanent) {
-		$prompt = "[PERMANENT] $Title"
-	}
-	if ($Warning) {
-		Write-Host "WARNING: $Warning" -ForegroundColor Yellow
-	}
-	$choice = Read-Host "$prompt (Y/N)"
-	return $choice -match '^(Y|y|Yes|YES)$'
-}
-
-function Test-PathAllowListed {
-	param([Parameter(Mandatory)][string]$Path)
-
-	foreach ($allowed in $AllowListPath) {
-		if ([string]::IsNullOrWhiteSpace($allowed)) { continue }
-		try {
-			$resolvedAllowed = [IO.Path]::GetFullPath($allowed)
-			$resolvedPath = [IO.Path]::GetFullPath($Path)
-			if ($resolvedPath.StartsWith($resolvedAllowed, [System.StringComparison]::OrdinalIgnoreCase)) {
-				return $true
-			}
-		}
-		catch {
-			continue
-		}
-	}
-	return $false
-}
-
-function Test-ProtectedPath {
-	param([Parameter(Mandatory)][string]$Path)
-
-	try {
-		$full = [IO.Path]::GetFullPath($Path)
-	}
-	catch {
-		return $true
-	}
-
-	foreach ($root in $script:ProtectedRoots) {
-		if ([string]::IsNullOrWhiteSpace($root)) { continue }
-		$resolvedRoot = [IO.Path]::GetFullPath($root)
-		if ($full.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-			if (Test-PathAllowListed -Path $full) {
-				return $false
-			}
-			return $true
-		}
-	}
-	return $false
-}
-
-function Export-Manifest {
-	param(
-		[Parameter(Mandatory)][string]$Name,
-		[Parameter(Mandatory)][System.Collections.IEnumerable]$Items
-	)
-
-	$rows = foreach ($item in $Items) {
-		if ($null -eq $item) { continue }
-		if ($item -is [string]) {
-			[PSCustomObject]@{
-				Path = $item
-				Exists = Test-Path -LiteralPath $item
-				Timestamp = (Get-Date)
-			}
-		}
-		else {
-			$item
-		}
-	}
-
-	$jsonPath = Join-Path $script:ManifestRoot "$Name.json"
-	$csvPath = Join-Path $script:ManifestRoot "$Name.csv"
-
-	$rows | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
-	$rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-	$script:Result.ManifestArtifacts.Add($jsonPath)
-	$script:Result.ManifestArtifacts.Add($csvPath)
-	Write-Log -Message "Manifest exported: $jsonPath ; $csvPath" -Category 'Manifest'
-}
-
-function Invoke-ExternalCommand {
-	param(
-		[Parameter(Mandatory)][string]$FilePath,
-		[Parameter()][string[]]$ArgumentList = @(),
-		[Parameter(Mandatory)][string]$Name
-	)
-
-	$stdOut = Join-Path $script:RunRoot "$Name.stdout.log"
-	$stdErr = Join-Path $script:RunRoot "$Name.stderr.log"
-
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would run: $FilePath $($ArgumentList -join ' ')" -Category 'Command'
-		return [PSCustomObject]@{ ExitCode = 0; StdOut = $stdOut; StdErr = $stdErr; DryRun = $true }
-	}
-
-	$proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr
-	Write-Log -Message "Command completed [$Name] ExitCode=$($proc.ExitCode). Output: $stdOut" -Category 'Command'
-
-	[PSCustomObject]@{
-		ExitCode = $proc.ExitCode
-		StdOut = $stdOut
-		StdErr = $stdErr
-		DryRun = $false
-	}
-}
-
-function Test-PendingReboot {
-	$keys = @(
-		'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
-		'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-		'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-	)
-	$pending = $false
-	foreach ($key in $keys) {
-		if (Test-Path -LiteralPath $key) {
-			if ($key -like '*Session Manager') {
-				$value = (Get-ItemProperty -Path $key -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
-				if ($value) { $pending = $true }
-			}
-			else {
-				$pending = $true
-			}
-		}
-	}
-	return $pending
-}
-
-function Test-UpdateInProgress {
-	$procs = @('TiWorker','TrustedInstaller','MoUsoCoreWorker','MusNotification','wuauclt')
-	foreach ($name in $procs) {
-		if (Get-Process -Name $name -ErrorAction SilentlyContinue) {
-			return $true
-		}
-	}
-	return $false
-}
-
-function Assert-UpdateSafeState {
-	$pendingReboot = Test-PendingReboot
-	$updateBusy = Test-UpdateInProgress
-
-	if ($pendingReboot -or $updateBusy) {
-		$reason = @()
-		if ($pendingReboot) { $reason += 'pending reboot detected' }
-		if ($updateBusy) { $reason += 'update installation currently active' }
-		$message = "Update-safe-state check failed: $($reason -join '; ')."
-		Write-Log -Message $message -Level 'ERROR' -Category 'Preflight'
-		Write-Log -Message 'Abort and re-run after reboot/update completion. Optionally schedule this script post-reboot.' -Level 'WARN' -Category 'Preflight'
-		$script:ExitCode = 2
-		throw $message
-	}
-}
-
-function Test-FreeSpace {
-	param(
-		[int]$MinimumGB = 2,
-		[string]$DriveLetter = ($env:SystemDrive -replace ':','')
-	)
-	$drive = Get-PSDrive -Name $DriveLetter
-	return ($drive.Free / 1GB) -ge $MinimumGB
-}
-
-function New-SystemRestorePoint {
-	$desc = "Optimize-Windows-$script:Stamp"
-	try {
-		if ($DryRun) {
-			Write-Log -Message "[DryRun] Would create system restore point: $desc" -Category 'RestorePoint'
-			Add-ActionResult -Action 'System restore point' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-
-		if (-not (Test-FreeSpace -MinimumGB 2)) {
-			throw 'Insufficient disk space for reliable safety backups/restore operations (<2 GB free on current drive).'
-		}
-
-		Checkpoint-Computer -Description $desc -RestorePointType 'MODIFY_SETTINGS' | Out-Null
-		Write-Log -Message 'System restore point created successfully.' -Level 'SUCCESS' -Category 'RestorePoint'
-		Add-ActionResult -Action 'System restore point' -Status 'Performed'
-	}
-	catch {
-		$msg = "System restore point unavailable: $($_.Exception.Message)"
-		if ($OverrideSafety) {
-			Write-Log -Message "$msg Continuing due to -OverrideSafety." -Level 'WARN' -Category 'RestorePoint'
-			Add-ActionResult -Action 'System restore point' -Status 'Skipped' -Reason 'OverrideSafety'
-			$script:Result.Recommendations.Add('Restore point was not created; ensure offline backup exists before future runs.')
-		}
-		else {
-			Write-Log -Message "$msg Use -OverrideSafety to continue without restore point." -Level 'ERROR' -Category 'RestorePoint'
-			$script:ExitCode = 2
-			throw 'Restore point requirement not met.'
-		}
-	}
-}
-
-function Get-HardwareProfile {
-	$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-	$mem = Get-CimInstance Win32_ComputerSystem
-	$disks = Get-CimInstance Win32_DiskDrive
-
-	$storageType = 'Unknown'
-	if (Get-Command -Name Get-PhysicalDisk -ErrorAction SilentlyContinue) {
-		$media = Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object -ExpandProperty MediaType -ErrorAction SilentlyContinue
-		if ($media -contains 'SSD') { $storageType = 'SSD' }
-		elseif ($media -contains 'HDD' -or $media -contains 'Unspecified') { $storageType = 'HDD' }
-	}
-	elseif ($disks.Model -match 'SSD|NVMe') {
-		$storageType = 'SSD'
-	}
-	elseif ($disks) {
-		$storageType = 'HDD'
-	}
-
-	$ramGb = [math]::Round(($mem.TotalPhysicalMemory / 1GB), 2)
-	$aggressiveness = 'Balanced'
-	if ($Aggressive) {
-		$aggressiveness = 'Aggressive'
-	}
-	elseif ($ramGb -lt 8 -or $storageType -eq 'HDD') {
-		$aggressiveness = 'Conservative'
-	}
-
-	$obj = [PSCustomObject]@{
-		CpuCores = [int]$cpu.NumberOfCores
-		LogicalProcessors = [int]$cpu.NumberOfLogicalProcessors
-		RamGB = $ramGb
-		StorageType = $storageType
-		Aggressiveness = $aggressiveness
-	}
-	$script:Result.Hardware = $obj
-	Write-Log -Message "Hardware profile: Cores=$($obj.CpuCores), RAM=$($obj.RamGB)GB, Storage=$($obj.StorageType), Mode=$($obj.Aggressiveness)." -Category 'Hardware'
-}
-
-function Get-SafeDeletionTargets {
-	param(
-		[Parameter(Mandatory)][string[]]$Roots,
-		[int]$OlderThanDays = 0
-	)
-
-	$threshold = (Get-Date).AddDays(-$OlderThanDays)
-	$targets = New-Object System.Collections.Generic.List[string]
-	foreach ($root in $Roots) {
-		if (-not (Test-Path -LiteralPath $root)) { continue }
-		try {
-			$items = Get-ChildItem -LiteralPath $root -Force -Recurse -ErrorAction SilentlyContinue
-			foreach ($item in $items) {
-				if ($item.PSIsContainer) { continue }
-				if ($OlderThanDays -gt 0 -and $item.LastWriteTime -gt $threshold) { continue }
-				if (Test-ProtectedPath -Path $item.FullName) { continue }
-				$targets.Add($item.FullName)
-			}
-		}
-		catch {
-			Write-Log -Message "Failed enumerating $root : $($_.Exception.Message)" -Level 'WARN' -Category 'Cleanup'
-		}
-	}
-	return $targets
-}
-
-function Remove-TargetsWithManifest {
-	param(
-		[Parameter(Mandatory)][string]$ActionName,
-		[Parameter(Mandatory)][System.Collections.Generic.List[string]]$Targets,
-		[string]$Category = 'Cleanup'
-	)
-
-	if ($Targets.Count -eq 0) {
-		Write-Log -Message "No targets found for $ActionName." -Category $Category
-		Add-ActionResult -Action $ActionName -Status 'Skipped' -Reason 'NoTargets'
-		return
-	}
-
-	Export-Manifest -Name ($ActionName -replace '\s+','_') -Items $Targets
-
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would remove $($Targets.Count) items for '$ActionName'." -Category $Category
-		Add-ActionResult -Action $ActionName -Status 'Skipped' -Reason 'DryRun'
-		return
-	}
-
-	$removed = 0
-	foreach ($target in $Targets) {
-		try {
-			Remove-Item -LiteralPath $target -Force -ErrorAction Stop
-			$script:Result.FilesRemoved.Add($target)
-			$removed++
-		}
-		catch {
-			Write-Log -Message "Failed removing $target : $($_.Exception.Message)" -Level 'WARN' -Category $Category
-		}
-	}
-
-	Write-Log -Message "Removed $removed items for '$ActionName'." -Category $Category
-	Add-ActionResult -Action $ActionName -Status 'Performed'
-}
-
-function Invoke-SystemFileValidation {
-	Write-Log -Message 'Starting system file validation (SFC + DISM RestoreHealth).' -Category 'Health'
-	try {
-		$sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -Name 'sfc_scannow'
-		$dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -Name 'dism_restorehealth'
-		$script:Result.SfcResult = $sfc
-		$script:Result.DismResult = $dism
-		Add-ActionResult -Action 'System file validation' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "System file validation failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Health'
-		Add-ActionResult -Action 'System file validation' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-ComponentStoreCleanup {
-	Write-Log -Message 'Running component store cleanup.' -Category 'DISM'
-	try {
-		Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/StartComponentCleanup') -Name 'dism_startcomponentcleanup' | Out-Null
-		Add-ActionResult -Action 'Component store cleanup' -Status 'Performed'
-
-		if (Confirm-Step -Title 'Run DISM /ResetBase (permanent; uninstall rollback for superseded components becomes unavailable)' -Warning 'This is permanent for superseded component versions.' -Permanent) {
-			$reset = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/StartComponentCleanup','/ResetBase') -Name 'dism_resetbase'
-			if ($reset.ExitCode -eq 0) {
-				Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Performed'
-			}
-			else {
-				Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Failed' -Reason "ExitCode=$($reset.ExitCode)"
-			}
-		}
-		else {
-			Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Skipped' -Reason 'UserDeclined'
-		}
-	}
-	catch {
-		Write-Log -Message "Component cleanup error: $($_.Exception.Message)" -Level 'ERROR' -Category 'DISM'
-		Add-ActionResult -Action 'Component store cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-WindowsUpdateCleanup {
-	Write-Log -Message 'Preparing Windows Update cache cleanup.' -Category 'WindowsUpdate'
-	$downloadPath = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
-
-	try {
-		Assert-UpdateSafeState
-
-		if (-not (Confirm-Step -Title "Clear Windows Update download cache at $downloadPath" -Warning 'Ensures no active update operation first.')) {
-			Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		if (-not (Test-Path -LiteralPath $downloadPath)) {
-			Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Skipped' -Reason 'PathMissing'
-			return
-		}
-
-		$targets = Get-ChildItem -LiteralPath $downloadPath -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | ForEach-Object FullName
-		$targetList = New-Object System.Collections.Generic.List[string]
-		foreach ($t in $targets) { if (-not (Test-ProtectedPath -Path $t)) { $targetList.Add($t) } }
-
-		if (-not $DryRun) {
-			Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-			Stop-Service -Name bits -Force -ErrorAction SilentlyContinue
-		}
-
-		Remove-TargetsWithManifest -ActionName 'Windows Update Download Cache' -Targets $targetList -Category 'WindowsUpdate'
-
-		if (-not $DryRun) {
-			Start-Service -Name bits -ErrorAction SilentlyContinue
-			Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-		}
-	}
-	catch {
-		Write-Log -Message "Windows Update cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'WindowsUpdate'
-		Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-DeliveryOptimizationCleanup {
-	$doPath = Join-Path $env:SystemRoot 'SoftwareDistribution\DeliveryOptimization'
-	Write-Log -Message "Preparing Delivery Optimization cleanup at $doPath" -Category 'DeliveryOptimization'
-	try {
-		if (-not (Confirm-Step -Title 'Clear Delivery Optimization cache' -Warning 'This will remove locally cached delivery optimization content.')) {
-			Add-ActionResult -Action 'Delivery Optimization cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-		$targets = New-Object System.Collections.Generic.List[string]
-		if (Test-Path -LiteralPath $doPath) {
-			Get-ChildItem -LiteralPath $doPath -Force -Recurse -ErrorAction SilentlyContinue |
-				Where-Object { -not $_.PSIsContainer } |
-				ForEach-Object {
-					if (-not (Test-ProtectedPath -Path $_.FullName)) { $targets.Add($_.FullName) }
-				}
-		}
-		Remove-TargetsWithManifest -ActionName 'Delivery Optimization Cache' -Targets $targets -Category 'DeliveryOptimization'
-	}
-	catch {
-		Write-Log -Message "Delivery Optimization cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'DeliveryOptimization'
-		Add-ActionResult -Action 'Delivery Optimization cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-TemporaryFilesCleanup {
-	Write-Log -Message "Cleaning temporary files older than $TempAgeDays day(s)." -Category 'Temp'
-	try {
-		$roots = @($env:SystemRoot + '\Temp', $env:TEMP, "$env:LOCALAPPDATA\Temp") | Select-Object -Unique
-		$targets = Get-SafeDeletionTargets -Roots $roots -OlderThanDays $TempAgeDays
-		Remove-TargetsWithManifest -ActionName 'Temporary Files Cleanup' -Targets $targets -Category 'Temp'
-	}
-	catch {
-		Write-Log -Message "Temporary cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Temp'
-		Add-ActionResult -Action 'Temporary files cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-ThumbnailAndBrowserCacheCleanup {
-	Write-Log -Message 'Preparing thumbnail and browser cache cleanup.' -Category 'Cache'
-	try {
-		$browserProcesses = Get-Process -Name msedge,chrome,firefox -ErrorAction SilentlyContinue
-		$warn = 'Only cache paths will be targeted; profile/account data is excluded.'
-		if ($browserProcesses) {
-			$warn = 'Browser processes are running; signed-in session data may be active. Cached web content only will be targeted.'
-		}
-		if (-not (Confirm-Step -Title 'Clear thumbnail and browser cache files (not profiles, not credentials)' -Warning $warn)) {
-			Add-ActionResult -Action 'Thumbnail and browser cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		$paths = @(
-			"$env:LOCALAPPDATA\Microsoft\Windows\Explorer",
-			"$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
-			"$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache",
-			"$env:LOCALAPPDATA\Mozilla\Firefox\Profiles"
-		)
-
-		$targets = New-Object System.Collections.Generic.List[string]
-		foreach ($path in $paths) {
-			if (-not (Test-Path -LiteralPath $path)) { continue }
-			if ($path -like '*Firefox\Profiles') {
-				Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-					$firefoxCache = Join-Path $_.FullName 'cache2'
-					if (Test-Path -LiteralPath $firefoxCache) {
-						Get-ChildItem -LiteralPath $firefoxCache -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-							$targets.Add($_.FullName)
-						}
-					}
-				}
-				continue
-			}
-			if ($path -like '*Windows\Explorer') {
-				Get-ChildItem -LiteralPath $path -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'thumbcache*' } | ForEach-Object {
-					$targets.Add($_.FullName)
-				}
-				continue
-			}
-			Get-ChildItem -LiteralPath $path -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-				$targets.Add($_.FullName)
-			}
-		}
-
-		Remove-TargetsWithManifest -ActionName 'Thumbnail_Browser_Cache_Cleanup' -Targets $targets -Category 'Cache'
-	}
-	catch {
-		Write-Log -Message "Cache cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Cache'
-		Add-ActionResult -Action 'Thumbnail and browser cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-RecycleBinCleanup {
-	try {
-		if (-not (Confirm-Step -Title 'Empty Recycle Bin' -Warning 'Items in Recycle Bin will be removed.')) {
-			Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would empty Recycle Bin.' -Category 'RecycleBin'
-			Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-		Clear-RecycleBin -Force -ErrorAction Stop
-		Write-Log -Message 'Recycle Bin emptied.' -Level 'SUCCESS' -Category 'RecycleBin'
-		Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Recycle Bin cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'RecycleBin'
-		Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-PrefetchCleanup {
-	if (-not $RemovePrefetch) {
-		Add-ActionResult -Action 'Prefetch cleanup' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Remove Prefetch files' -Warning 'Prefetch cleanup can cause short-term slowdown after reboot.')) {
-		Add-ActionResult -Action 'Prefetch cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	$path = Join-Path $env:SystemRoot 'Prefetch'
-	$targets = New-Object System.Collections.Generic.List[string]
-	if (Test-Path -LiteralPath $path) {
-		Get-ChildItem -LiteralPath $path -File -ErrorAction SilentlyContinue | ForEach-Object { $targets.Add($_.FullName) }
-	}
-	Remove-TargetsWithManifest -ActionName 'Prefetch Cleanup' -Targets $targets -Category 'Prefetch'
-}
-
-function Invoke-SearchIndexRebuild {
-	if (-not $RebuildSearchIndex) {
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Request Windows Search index rebuild' -Warning 'Index rebuild may increase CPU and disk usage temporarily.')) {
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would request Windows Search index rebuild via COM interface.' -Category 'Search'
-			Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-
-		$catalogManager = New-Object -ComObject 'Search.Manager'
-		$catalog = $catalogManager.GetCatalog('SystemIndex')
-		$catalog.Reindex()
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Performed'
-		Write-Log -Message 'Search index rebuild requested.' -Category 'Search'
-	}
-	catch {
-		Write-Log -Message "Search index rebuild request failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Search'
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Export-RegistryBackup {
-	param(
-		[Parameter(Mandatory)][string]$RegistryPath,
-		[Parameter(Mandatory)][string]$Name
-	)
-
-	$regPath = $RegistryPath -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' -replace '^HKCU:', 'HKEY_CURRENT_USER'
-	$dest = Join-Path $script:BackupRoot "$Name.reg"
-
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would export registry path $RegistryPath to $dest" -Category 'Registry'
-		return $dest
-	}
-
-	$result = Invoke-ExternalCommand -FilePath 'reg.exe' -ArgumentList @('export', $regPath, $dest, '/y') -Name "reg_export_$Name"
-	if ($result.ExitCode -eq 0) {
-		$script:Result.BackupArtifacts.Add($dest)
-	}
-	return $dest
-}
-
-function Invoke-TelemetryRecommendations {
-	if (-not $RecommendTelemetryChanges) {
-		$script:Result.Recommendations.Add('Telemetry tuning not requested. Consider reviewing diagnostic data level and startup telemetry apps manually.')
-		Add-ActionResult -Action 'Telemetry recommendations' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	Write-Log -Message 'Preparing conservative telemetry recommendations.' -Category 'Telemetry'
-	$script:Result.Recommendations.Add('Suggested: Set diagnostic data to Required only (Basic).')
-	$script:Result.Recommendations.Add('Suggested: Review startup telemetry apps and scheduled tasks before disabling.')
-
-	if (-not (Confirm-Step -Title 'Apply conservative diagnostic data setting changes' -Warning 'Changes are reversible; registry backup will be exported first.')) {
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		$backup = Export-RegistryBackup -RegistryPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'DataCollection_backup'
-		if (-not $DryRun) {
-			New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
-			Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 1
-		}
-		Write-Log -Message "Telemetry policy updated (AllowTelemetry=1). Backup: $backup" -Category 'Telemetry'
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Telemetry settings update failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Telemetry'
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-ServiceStartupRecommendations {
-	$services = Get-Service | Sort-Object Status, DisplayName
-	$startupCommands = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue
-	$weights = @{ Gaming = 3; Office = 2; Development = 1 }
-	$profileWeight = $weights[$OptimizationProfile]
-
-	$candidates = foreach ($svc in $services) {
-		if ($script:EssentialServices -contains $svc.Name) { continue }
-		if ($svc.Status -ne 'Running') { continue }
-		$score = 1
-		if ($svc.Name -match 'OEM|Updater|Update|Telemetry|Diag|Assistant') { $score += 2 }
-		if ($OptimizationProfile -eq 'Gaming' -and $svc.Name -match 'Xbox|Game') { $score += 2 }
-		if ($OptimizationProfile -eq 'Development' -and $svc.Name -match 'Docker|Hyper|WSL') { $score -= 2 }
-		if ($score -lt $profileWeight) { continue }
-		$priority = 'Medium'
-		if ($score -ge 3) {
-			$priority = 'High'
-		}
-		[PSCustomObject]@{
-			Type = 'Service'
-			Name = $svc.Name
-			DisplayName = $svc.DisplayName
-			Status = [string]$svc.Status
-			RecommendedAction = 'SetStartupTypeManual'
-			Priority = $priority
-			Description = (Get-CimInstance Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue).Description
-		}
-	}
-
-	$startup = foreach ($cmd in $startupCommands) {
-		if ($cmd.Name -match 'Security|Defender|OneDrive|Windows') { continue }
-		[PSCustomObject]@{
-			Type = 'StartupApp'
-			Name = $cmd.Name
-			DisplayName = $cmd.Caption
-			Status = 'Enabled'
-			RecommendedAction = 'DisableStartupEntry'
-			Priority = 'Medium'
-			Description = $cmd.Command
-			Location = $cmd.Location
-		}
-	}
-
-	$recommendations = @($candidates + $startup | Sort-Object Priority)
-	$path = Join-Path $script:RunRoot 'service_startup_recommendations.json'
-	$recommendations | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
-	Write-Log -Message "Service/startup recommendations exported: $path" -Category 'Optimization'
-	return $recommendations
-}
-
-function Disable-StartupCommandEntry {
-	param(
-		[Parameter(Mandatory)][string]$EntryName,
-		[string]$Location
-	)
-
-	$targets = @(
-		'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
-		'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
-		'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
-	)
-
-	foreach ($target in $targets) {
-		if (-not (Test-Path -LiteralPath $target)) { continue }
-		$props = Get-ItemProperty -Path $target -ErrorAction SilentlyContinue
-		if ($null -ne $props.PSObject.Properties[$EntryName]) {
-			Remove-ItemProperty -Path $target -Name $EntryName -ErrorAction Stop
-			return $true
-		}
-	}
-
-	Write-Log -Message "Startup entry '$EntryName' could not be disabled automatically. Location: $Location" -Level 'WARN' -Category 'Optimization'
-	return $false
-}
-
-function Invoke-ServiceStartupOptimization {
-	Write-Log -Message "Analyzing services/startup candidates for profile '$OptimizationProfile'." -Category 'Optimization'
-	try {
-		$recs = Get-ServiceStartupRecommendations
-		if (-not $recs -or $recs.Count -eq 0) {
-			Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Skipped' -Reason 'NoCandidates'
-			return
-		}
-
-		$previewPath = Join-Path $script:RunRoot 'service_startup_candidates.csv'
-		$recs | Export-Csv -Path $previewPath -NoTypeInformation -Encoding UTF8
-
-		foreach ($rec in $recs) {
-			$title = "Apply recommendation: [$($rec.Type)] $($rec.Name) -> $($rec.RecommendedAction)"
-			if (-not (Confirm-Step -Title $title -Warning 'Essential networking/auth/search/update/security services are protected.')) {
-				continue
-			}
-
-			if ($DryRun) {
-				Write-Log -Message "[DryRun] Would apply recommendation to $($rec.Name)." -Category 'Optimization'
-				continue
-			}
-
-			if ($rec.Type -eq 'Service' -and $script:EssentialServices -notcontains $rec.Name) {
-				Set-Service -Name $rec.Name -StartupType Manual -ErrorAction Stop
-				$change = [PSCustomObject]@{ Name = $rec.Name; Action = 'StartupType=Manual'; Timestamp = Get-Date }
-				$script:Result.ServicesChanged.Add($change)
-			}
-			elseif ($rec.Type -eq 'StartupApp') {
-				if (Disable-StartupCommandEntry -EntryName $rec.Name -Location $rec.Location) {
-					$change = [PSCustomObject]@{ Name = $rec.Name; Action = 'StartupEntryDisabled'; Timestamp = Get-Date }
-					$script:Result.ServicesChanged.Add($change)
-				}
-			}
-		}
-
-		Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Service/startup optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Optimization'
-		Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-DriverInventory {
-	$resultPath = Join-Path $script:RunRoot 'drivers_inventory_raw.txt'
-	if ($DryRun) {
-		Write-Log -Message '[DryRun] Would enumerate drivers using pnputil /enum-drivers.' -Category 'Drivers'
-		return @()
-	}
-
-	$raw = & pnputil.exe /enum-drivers 2>&1
-	$raw | Set-Content -Path $resultPath -Encoding UTF8
-
-	$drivers = New-Object System.Collections.Generic.List[object]
-	$current = [ordered]@{}
-	foreach ($line in $raw) {
-		if ($line -match '^Published Name\s*:\s*(.+)$') {
-			if ($current.Count -gt 0) {
-				$drivers.Add([PSCustomObject]$current)
-				$current = [ordered]@{}
-			}
-			$current.PublishedName = $Matches[1].Trim()
-		}
-		elseif ($line -match '^Original Name\s*:\s*(.+)$') { $current.OriginalName = $Matches[1].Trim() }
-		elseif ($line -match '^Provider Name\s*:\s*(.+)$') { $current.ProviderName = $Matches[1].Trim() }
-		elseif ($line -match '^Class Name\s*:\s*(.+)$') { $current.ClassName = $Matches[1].Trim() }
-		elseif ($line -match '^Driver Version\s*:\s*(.+)$') { $current.DriverVersion = $Matches[1].Trim() }
-		elseif ($line -match '^Signer Name\s*:\s*(.+)$') { $current.SignerName = $Matches[1].Trim() }
-	}
-	if ($current.Count -gt 0) { $drivers.Add([PSCustomObject]$current) }
-	return $drivers
-}
-
-function Invoke-DriverManagement {
-	Write-Log -Message 'Starting driver inventory and duplicate analysis.' -Category 'Drivers'
-	try {
-		$drivers = Get-DriverInventory
-		$csv = Join-Path $script:RunRoot 'drivers_inventory.csv'
-		$json = Join-Path $script:RunRoot 'drivers_inventory.json'
-		$drivers | Export-Csv -Path $csv -NoTypeInformation -Encoding UTF8
-		$drivers | ConvertTo-Json -Depth 6 | Set-Content -Path $json -Encoding UTF8
-		Write-Log -Message "Driver inventory exported: $csv ; $json" -Category 'Drivers'
-
-		$dupes = $drivers | Where-Object { $_.OriginalName } | Group-Object OriginalName | Where-Object { $_.Count -gt 1 }
-		if ($dupes) {
-			$dupPath = Join-Path $script:RunRoot 'duplicate_drivers.csv'
-			$dupes | ForEach-Object {
-				$_.Group | Select-Object OriginalName, PublishedName, ProviderName, DriverVersion, ClassName
-			} | Export-Csv -Path $dupPath -NoTypeInformation -Encoding UTF8
-			Write-Log -Message "Duplicate drivers listed: $dupPath" -Level 'WARN' -Category 'Drivers'
-
-			if (Confirm-Step -Title 'Review duplicate drivers for optional removal now' -Warning 'No driver will be removed automatically without explicit confirmation.') {
-				foreach ($dup in $dupes) {
-					foreach ($entry in $dup.Group) {
-						$title = "Remove duplicate driver $($entry.PublishedName) ($($entry.OriginalName))"
-						if (-not (Confirm-Step -Title $title -Warning 'Driver removal can affect hardware functionality. Backup will be created first.')) { continue }
-
-						$backupDir = Join-Path $script:BackupRoot "Drivers_$script:Stamp"
-						if (-not $DryRun) {
-							New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
-							try {
-								if (Get-Command Export-WindowsDriver -ErrorAction SilentlyContinue) {
-									Export-WindowsDriver -Online -Destination $backupDir | Out-Null
-								}
-								else {
-									# Fallback when Export-WindowsDriver cmdlet is unavailable.
-									& pnputil.exe /export-driver * $backupDir | Out-Null
-								}
-							}
-							catch {
-								Write-Log -Message "Driver backup failed before removal: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-								continue
-							}
-							$script:Result.DriversBackedUp.Add($backupDir)
-
-							$removeResult = Invoke-ExternalCommand -FilePath 'pnputil.exe' -ArgumentList @('/delete-driver', $entry.PublishedName, '/uninstall') -Name "driver_remove_$($entry.PublishedName)"
-							if ($removeResult.ExitCode -eq 0) {
-								$script:Result.DriversRemoved.Add($entry.PublishedName)
-							}
-						}
-						else {
-							Write-Log -Message "[DryRun] Would backup drivers and remove duplicate $($entry.PublishedName)." -Category 'Drivers'
-						}
-					}
-				}
-			}
-		}
-
-		Add-ActionResult -Action 'Driver inventory and duplicate analysis' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Driver analysis failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver inventory and duplicate analysis' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-DriverUpdateRecommendations {
-	$report = Join-Path $script:RunRoot 'driver_update_recommendations.json'
-	try {
-		if (Get-Command -Name Get-WindowsUpdate -ErrorAction SilentlyContinue) {
-			if ($DryRun) {
-				$updates = @([PSCustomObject]@{ Source='PSWindowsUpdate'; Title='Driver update scan would run in non-DryRun mode.' })
-			}
-			else {
-				$updates = Get-WindowsUpdate -MicrosoftUpdate -Category Drivers -IgnoreReboot -ErrorAction Stop |
-					Select-Object Title, KB, Size, LastDeploymentChangeTime
-			}
-			$updates | ConvertTo-Json -Depth 5 | Set-Content -Path $report -Encoding UTF8
-			return $updates
-		}
-
-		# Limitation: native COM API gives less-rich metadata than PSWindowsUpdate, but avoids non-default dependency.
-		$session = New-Object -ComObject 'Microsoft.Update.Session'
-		$searcher = $session.CreateUpdateSearcher()
-		$criteria = "IsInstalled=0 and Type='Driver'"
-		$searchResult = $searcher.Search($criteria)
-		$updates = for ($i=0; $i -lt $searchResult.Updates.Count; $i++) {
-			$u = $searchResult.Updates.Item($i)
-			[PSCustomObject]@{
-				Source = 'WindowsUpdateCOM'
-				Title = $u.Title
-				IsDownloaded = $u.IsDownloaded
-				RebootRequired = $u.RebootRequired
-			}
-		}
-		$updates | ConvertTo-Json -Depth 5 | Set-Content -Path $report -Encoding UTF8
-		return $updates
-	}
-	catch {
-		Write-Log -Message "Driver update recommendation query failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Drivers'
-		return @()
-	}
-}
-
-function Invoke-DriverAutoUpdate {
-	$updates = Get-DriverUpdateRecommendations
-	if (-not $updates -or $updates.Count -eq 0) {
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'NoUpdates'
-		return
-	}
-
-	if (-not $AutoUpdateDrivers) {
-		Write-Log -Message 'Driver updates available; AutoUpdateDrivers not set. See recommendation report.' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Install driver updates from Windows Update channel only' -Warning 'No third-party vendor installers will be invoked. Drivers will be backed up first.')) {
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	$backupDir = Join-Path $script:BackupRoot "Drivers_PreUpdate_$script:Stamp"
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would backup drivers to $backupDir and install Windows Update driver updates." -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'DryRun'
-		return
-	}
-
-	try {
-		New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
-		if (Get-Command Export-WindowsDriver -ErrorAction SilentlyContinue) {
-			Export-WindowsDriver -Online -Destination $backupDir | Out-Null
-		}
-		else {
-			& pnputil.exe /export-driver * $backupDir | Out-Null
-		}
-		$script:Result.DriversBackedUp.Add($backupDir)
-
-		if (Get-Command -Name Install-WindowsUpdate -ErrorAction SilentlyContinue) {
-			Install-WindowsUpdate -MicrosoftUpdate -Category Drivers -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
-		}
-		else {
-			# Limitation fallback: COM installation path may install only updates surfaced in current scan and can provide limited progress details.
-			$session = New-Object -ComObject 'Microsoft.Update.Session'
-			$searcher = $session.CreateUpdateSearcher()
-			$sr = $searcher.Search("IsInstalled=0 and Type='Driver'")
-			if ($sr.Updates.Count -gt 0) {
-				$coll = New-Object -ComObject 'Microsoft.Update.UpdateColl'
-				for ($i=0; $i -lt $sr.Updates.Count; $i++) { [void]$coll.Add($sr.Updates.Item($i)) }
-				$downloader = $session.CreateUpdateDownloader()
-				$downloader.Updates = $coll
-				[void]$downloader.Download()
-				$installer = $session.CreateUpdateInstaller()
-				$installer.Updates = $coll
-				[void]$installer.Install()
-			}
-		}
-
-		Add-ActionResult -Action 'Driver update installation' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Driver update installation failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-BloatwareCandidates {
-	$safeNames = @(
-		'Microsoft.BingNews',
-		'Microsoft.BingWeather',
-		'Microsoft.GetHelp',
-		'Microsoft.Getstarted',
-		'Microsoft.MicrosoftOfficeHub',
-		'Microsoft.MicrosoftSolitaireCollection',
-		'Microsoft.People',
-		'Microsoft.SkypeApp',
-		'Microsoft.Xbox.TCUI',
-		'Microsoft.XboxGamingOverlay',
-		'Microsoft.XboxGameOverlay',
-		'Microsoft.XboxIdentityProvider',
-		'Microsoft.XboxSpeechToTextOverlay',
-		'Microsoft.ZuneMusic',
-		'Microsoft.ZuneVideo'
-	)
-
-	$all = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-	$all | Where-Object { $safeNames -contains $_.Name } | Select-Object Name, PackageFullName, Publisher, InstallLocation
-}
-
-function Invoke-BloatwareWorkflow {
-	try {
-		$inventoryPath = Join-Path $script:BackupRoot 'appx_inventory_before.json'
-		$all = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Select-Object Name, PackageFullName, NonRemovable, SignatureKind
-		$all | ConvertTo-Json -Depth 5 | Set-Content -Path $inventoryPath -Encoding UTF8
-		$script:Result.BackupArtifacts.Add($inventoryPath)
-
-		$candidates = Get-BloatwareCandidates
-		$preview = Join-Path $script:RunRoot 'bloatware_candidates.csv'
-		$candidates | Export-Csv -Path $preview -NoTypeInformation -Encoding UTF8
-
-		if ($PreviewBloatRemoval -or -not $RemoveBloat) {
-			Write-Log -Message "Bloatware preview exported: $preview" -Category 'Bloatware'
-			$skipReason = 'FlagNotSet'
-			if ($RemoveBloat) {
-				$skipReason = 'PreviewOnly'
-			}
-			Add-ActionResult -Action 'Bloatware removal' -Status 'Skipped' -Reason $skipReason
-			return
-		}
-
-		if (-not (Confirm-Step -Title 'Remove bloatware candidates from safe list' -Warning 'Core OS/account-critical apps are excluded.')) {
-			Add-ActionResult -Action 'Bloatware removal' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		$removed = New-Object System.Collections.Generic.List[object]
-		foreach ($pkg in $candidates) {
-			if ($DryRun) {
-				Write-Log -Message "[DryRun] Would remove Appx package: $($pkg.PackageFullName)" -Category 'Bloatware'
-				continue
-			}
-
-			try {
-				Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
-				$removed.Add($pkg)
-			}
-			catch {
-				Write-Log -Message "Failed removing package $($pkg.Name): $($_.Exception.Message)" -Level 'WARN' -Category 'Bloatware'
-			}
-		}
-
-		$removedPath = Join-Path $script:RunRoot 'removed_bloatware.csv'
-		$removed | Export-Csv -Path $removedPath -NoTypeInformation -Encoding UTF8
-		Add-ActionResult -Action 'Bloatware removal' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Bloatware workflow failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Bloatware'
-		Add-ActionResult -Action 'Bloatware removal' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-PowerPlanOptimization {
-	try {
-		if (-not (Confirm-Step -Title 'Apply conservative power plan policy (AC=High Performance, Battery=Balanced)' -Warning 'Balanced behavior on battery is preserved by default.')) {
-			Add-ActionResult -Action 'Power plan optimization' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would switch active plan based on current power source.' -Category 'Performance'
-			Add-ActionResult -Action 'Power plan optimization' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-
-		$battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
-		$highPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
-		$balancedGuid = '381b4222-f694-41f0-9685-ff5bb260df2e'
-		if ($battery) {
-			powercfg /setactive $balancedGuid | Out-Null
-			Write-Log -Message 'Battery-capable system detected. Balanced plan set.' -Category 'Performance'
-		}
-		else {
-			powercfg /setactive $highPerfGuid | Out-Null
-			Write-Log -Message 'AC-only system detected. High Performance plan set.' -Category 'Performance'
-		}
-		Add-ActionResult -Action 'Power plan optimization' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Power plan optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Power plan optimization' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-StorageOptimization {
-	try {
-		$storage = $script:Result.Hardware.StorageType
-		if ($storage -eq 'SSD') {
-			$trimCheck = & fsutil.exe behavior query DisableDeleteNotify 2>&1
-			Write-Log -Message "TRIM status query: $trimCheck" -Category 'Performance'
-			$trimDisabled = [bool]($trimCheck -match '=\s*1')
-			if ($trimDisabled) {
-				if (Confirm-Step -Title 'Enable SSD TRIM (DisableDeleteNotify=0)' -Warning 'TRIM appears disabled; enabling is recommended for SSD health and performance.') {
-					if ($DryRun) {
-						Write-Log -Message '[DryRun] Would run: fsutil behavior set DisableDeleteNotify 0' -Category 'Performance'
-					}
-					else {
-						& fsutil.exe behavior set DisableDeleteNotify 0 | Out-Null
-						Write-Log -Message 'Enabled SSD TRIM (DisableDeleteNotify=0).' -Category 'Performance'
-					}
-				}
-				else {
-					Write-Log -Message 'TRIM remains disabled by user choice.' -Level 'WARN' -Category 'Performance'
-				}
-			}
-			if ($DryRun) {
-				Write-Log -Message '[DryRun] Would schedule SSD optimization (retrim) and skip defragmentation.' -Category 'Performance'
-			}
-			else {
-				Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue | Out-Null
-			}
-			$ssdActionStatus = 'Performed'
-			$ssdActionReason = $null
-			if ($DryRun) {
-				$ssdActionStatus = 'Skipped'
-				$ssdActionReason = 'DryRun'
-			}
-			Add-ActionResult -Action 'Storage optimization (SSD)' -Status $ssdActionStatus -Reason $ssdActionReason
-		}
-		elseif ($storage -eq 'HDD') {
-			if (Confirm-Step -Title 'Schedule HDD defragmentation/optimization' -Warning 'Defragmentation is only offered for HDD scenarios.') {
-				if ($DryRun) {
-					Write-Log -Message '[DryRun] Would run Optimize-Volume -Defrag on C:.' -Category 'Performance'
-					Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Skipped' -Reason 'DryRun'
-				}
-				else {
-					Optimize-Volume -DriveLetter C -Defrag -Verbose -ErrorAction SilentlyContinue | Out-Null
-					Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Performed'
-				}
-			}
-			else {
-				Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Skipped' -Reason 'UserDeclined'
-			}
-		}
-		else {
-			Add-ActionResult -Action 'Storage optimization' -Status 'Skipped' -Reason 'UnknownStorageType'
-		}
-	}
-	catch {
-		Write-Log -Message "Storage optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Storage optimization' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-VisualEffectsOptimization {
-	try {
-		$mode = 'BalancedReducedAnimations'
-		if ($Aggressive) {
-			$mode = 'BestPerformance'
-		}
-		if (-not (Confirm-Step -Title "Apply visual effects mode: $mode" -Warning 'Registry backup will be exported before changes.')) {
-			Add-ActionResult -Action 'Visual effects optimization' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		$backup = Export-RegistryBackup -RegistryPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualEffects_backup'
-		if ($DryRun) {
-			Write-Log -Message "[DryRun] Would apply visual effects mode $mode (backup: $backup)." -Category 'Performance'
-			Add-ActionResult -Action 'Visual effects optimization' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-
-		New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
-		if ($Aggressive) {
-			Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2 -Type DWord
-		}
-		else {
-			Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 3 -Type DWord
-			Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name UserPreferencesMask -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -Type Binary
-		}
-		Add-ActionResult -Action 'Visual effects optimization' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Visual effects optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Visual effects optimization' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-OptionalRegistryTweaks {
-	if (-not $Aggressive) {
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Skipped' -Reason 'AggressiveNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Apply optional aggressive registry performance tweaks' -Warning 'Registry exports will be created before changes.')) {
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		$backup1 = Export-RegistryBackup -RegistryPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'MemoryManagement_backup'
-		if (-not $DryRun) {
-			Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'LargeSystemCache' -Type DWord -Value 0
-			Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePagingExecutive' -Type DWord -Value 0
-		}
-		Write-Log -Message "Optional registry tweaks applied. Backup: $backup1" -Category 'Performance'
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Optional registry tweaks failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Write-FinalSummary {
-	$script:Result.EndedAt = Get-Date
-	$duration = New-TimeSpan -Start $script:StartTime -End $script:Result.EndedAt
-
-	$summaryTxt = Join-Path $script:RunRoot 'summary_report.txt'
-
-	$lines = @(
-		"Run ID: $($script:Result.RunId)",
-		"Started: $($script:Result.StartedAt)",
-		"Ended: $($script:Result.EndedAt)",
-		"Duration: $([int]$duration.TotalSeconds) sec",
-		"User: $($script:Result.User)",
-		"Machine: $($script:Result.Machine)",
-		"DryRun: $($script:Result.DryRun)",
-		"Actions Performed: $($script:Result.ActionsPerformed.Count)",
-		"Actions Skipped: $($script:Result.ActionsSkipped.Count)",
-		"Actions Failed: $($script:Result.ActionsFailed.Count)",
-		"Files Removed: $($script:Result.FilesRemoved.Count)",
-		"Services Changed: $($script:Result.ServicesChanged.Count)",
-		"Drivers Backed Up: $($script:Result.DriversBackedUp.Count)",
-		"Drivers Removed: $($script:Result.DriversRemoved.Count)",
-		"---",
-		"Performed:",
-		($script:Result.ActionsPerformed -join [Environment]::NewLine),
-		"---",
-		"Skipped:",
-		($script:Result.ActionsSkipped -join [Environment]::NewLine),
-		"---",
-		"Failed:",
-		($script:Result.ActionsFailed -join [Environment]::NewLine),
-		"---",
-		"Recommendations:",
-		($script:Result.Recommendations -join [Environment]::NewLine)
-	)
-
-	$lines | Set-Content -Path $summaryTxt -Encoding UTF8
-	$script:Result | ConvertTo-Json -Depth 8 | Set-Content -Path $script:ReportPath -Encoding UTF8
-
-	Write-Log -Message "Final summary written: $summaryTxt" -Category 'Summary'
-	Write-Log -Message "JSON summary written: $script:ReportPath" -Category 'Summary'
-
-	Write-Host "`n===== Optimize-Windows Summary ====="
-	Write-Host "Run folder: $script:RunRoot"
-	Write-Host "Performed: $($script:Result.ActionsPerformed.Count)"
-	Write-Host "Skipped: $($script:Result.ActionsSkipped.Count)"
-	Write-Host "Failed: $($script:Result.ActionsFailed.Count)"
-	Write-Host "ExitCode: $script:ExitCode"
-	Write-Host '===================================='
-}
-
-function Test-IsWindowsPlatform {
-    # PowerShell 6+ exposes $IsWindows; Windows PowerShell 5.1 does not.
-    # Under Set-StrictMode, direct use of undefined $IsWindows throws.
-    if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) {
-        return [bool]$IsWindows
-    }
-
-    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-}
-
-function Invoke-Main {
-    try {
-        Initialize-RunFolders
-        Write-Log -Message 'Optimize-Windows run started.' -Category 'Start'
-
-        if (-not (Test-IsWindowsPlatform)) {
-            throw 'This script supports Windows only.'
-        }
-
-        Assert-Administrator
-        Assert-OsCompatibility
-        Assert-UpdateSafeState
-        New-SystemRestorePoint
-        Get-HardwareProfile | Out-Null
-
-        Invoke-SystemFileValidation
-        Invoke-ComponentStoreCleanup
-        Invoke-WindowsUpdateCleanup
-        Invoke-DeliveryOptimizationCleanup
-        Invoke-TemporaryFilesCleanup
-        Invoke-ThumbnailAndBrowserCacheCleanup
-        Invoke-RecycleBinCleanup
-        Invoke-PrefetchCleanup
-        Invoke-SearchIndexRebuild
-        Invoke-TelemetryRecommendations
-
-        Invoke-ServiceStartupOptimization
-
-        Invoke-DriverManagement
-        Invoke-DriverAutoUpdate
-
-        Invoke-BloatwareWorkflow
-
-        Invoke-PowerPlanOptimization
-        Invoke-StorageOptimization
-        Invoke-VisualEffectsOptimization
-        Invoke-OptionalRegistryTweaks
-    }
-    catch {
-        Write-Log -Message "Fatal run error: $($_.Exception.Message)" -Level 'ERROR' -Category 'Main'
-        if ($script:ExitCode -lt 2) { $script:ExitCode = 2 }
-    }
-    finally {
-        Write-FinalSummary
-    }
-
-    if ($script:Result.ActionsFailed.Count -gt 0 -and $script:ExitCode -eq 0) {
-        $script:ExitCode = 1
-    }
-
-    exit $script:ExitCode
-}
-
-# Explicit policy note: This script does not exfiltrate user data and does not send telemetry externally.
-Invoke-Main
-=======
-#requires -Version 5.1
+function New-ModuleResult {
 <#
 .SYNOPSIS
-Safe, hardware-aware Windows 10 cleanup and optimization script with strong guardrails.
+Creates a standardized module result object.
 
 .DESCRIPTION
-Optimize-Windows performs conservative maintenance, cleanup, diagnostics, and optional optimization tasks with
-administrator enforcement, strict OS validation, dry-run support, interactive confirmation flow, reversible backups,
-manifest generation, and detailed reporting.
+Returns a structured object with a consistent schema for module reporting and aggregation.
 
-Target OS: Windows 10 Pro 64-bit 22H2 build 19045.7058.
-
-Safety notes:
-- Never touches protected user data stores (credentials, browser profiles, search index data, account-sensitive stores).
-- Exports manifests before removals and backups before destructive operations where possible.
-- Does not disable security-critical services by default.
-
-.PARAMETER DryRun
-Reports all planned actions without applying changes.
-
-.PARAMETER Force
-Runs non-interactively (skips prompts) while still respecting safety gates.
-
-.PARAMETER Interactive
-Enables interactive confirmations for major destructive steps. Interactive mode is default unless -Force is used.
-
-.PARAMETER OverrideOSCheck
-Allows running on non-target Windows builds after warning.
-
-.PARAMETER OverrideSafety
-Allows continuing when restore point cannot be created or safety prerequisites are degraded.
-
-.PARAMETER TempAgeDays
-Minimum age (in days) for temp files eligible for deletion.
-
-.PARAMETER RemovePrefetch
-Opt-in prefetch cleanup. Disabled by default.
-
-.PARAMETER RebuildSearchIndex
-Opt-in search index rebuild request (does not delete index files).
-
-.PARAMETER RecommendTelemetryChanges
-Shows conservative telemetry reduction recommendations and optionally applies with explicit consent.
-
-.PARAMETER OptimizationProfile
-Optimization recommendation profile: Gaming, Office, Development.
-Alias: -Profile
-
-.PARAMETER Aggressive
-Enables more aggressive performance tweaks (still confirmation-gated).
-
-.PARAMETER RemoveBloat
-Removes safe bloatware candidates with confirmation.
-
-.PARAMETER PreviewBloatRemoval
-Shows bloatware candidates without removing.
-
-.PARAMETER AutoUpdateDrivers
-Attempts driver updates from Windows Update channel only after backup and confirmation.
-
-.PARAMETER AllowListPath
-Explicit allow-list paths for user content areas otherwise protected from deletion.
+.PARAMETER ModuleName
+Logical module name.
 
 .EXAMPLE
-.\Optimize-Windows.ps1 -DryRun
-
-.EXAMPLE
-.\Optimize-Windows.ps1 -Force -AutoUpdateDrivers -RemoveBloat
-
-.EXAMPLE
-.\Optimize-Windows.ps1 -OptimizationProfile Gaming -Aggressive
+$result = New-ModuleResult -ModuleName 'Module1'
 #>
-[CmdletBinding()]
-param(
-	[switch]$DryRun,
-	[switch]$Force,
-	[switch]$Interactive,
-	[switch]$OverrideOSCheck,
-	[switch]$OverrideSafety,
-	[ValidateRange(1, 365)]
-	[int]$TempAgeDays = 7,
-	[switch]$RemovePrefetch,
-	[switch]$RebuildSearchIndex,
-	[switch]$RecommendTelemetryChanges,
-	[Alias('Profile')]
-	[ValidateSet('Gaming', 'Office', 'Development')]
-	[string]$OptimizationProfile = 'Office',
-	[switch]$Aggressive,
-	[switch]$RemoveBloat,
-	[switch]$PreviewBloatRemoval,
-	[switch]$AutoUpdateDrivers,
-	[string[]]$AllowListPath = @()
-)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
-$script:RunId = [guid]::NewGuid().ToString()
-$script:StartTime = Get-Date
-$script:CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$script:Machine = $env:COMPUTERNAME
-$script:ScriptRoot = Split-Path -Parent $PSCommandPath
-$script:Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$script:LogRoot = Join-Path $script:ScriptRoot 'Logs'
-$script:RunRoot = Join-Path $script:LogRoot "OptimizeRun_$script:Stamp`_$($script:RunId.Substring(0,8))"
-$script:ManifestRoot = Join-Path $script:RunRoot 'Manifests'
-$script:BackupRoot = Join-Path $script:RunRoot 'Backups'
-$script:ReportPath = Join-Path $script:RunRoot 'summary_report.json'
-$script:LogPath = Join-Path $script:RunRoot 'optimize.log'
-if ($Force) {
-	$script:IsInteractiveMode = $false
-}
-elseif ($PSBoundParameters.ContainsKey('Interactive')) {
-	$script:IsInteractiveMode = [bool]$Interactive
-}
-else {
-	$script:IsInteractiveMode = $true
-}
-$script:ExitCode = 0
-
-$script:TargetOS = [ordered]@{
-	ProductName = 'Windows 10 Pro'
-	BuildNumber = 19045
-	Ubr = 7058
-	Architecture = '64-bit'
-	ReleaseId = '22H2'
-}
-
-$script:ProtectedRoots = @(
-	"$env:USERPROFILE\Documents",
-	"$env:USERPROFILE\Pictures",
-	"$env:USERPROFILE\Videos",
-	"$env:USERPROFILE\Desktop",
-	"$env:USERPROFILE\Downloads",
-	"$env:APPDATA",
-	"$env:LOCALAPPDATA\Packages",
-	"$env:USERPROFILE\AppData\Roaming\Microsoft\Credentials",
-	"$env:LOCALAPPDATA\Microsoft\Credentials",
-	"$env:LOCALAPPDATA\Microsoft\Edge\User Data",
-	"$env:LOCALAPPDATA\Google\Chrome\User Data",
-	"$env:APPDATA\Mozilla\Firefox\Profiles",
-	"$env:PROGRAMDATA\Microsoft\Search"
-)
-
-$script:SafeUserTempRoots = @(
-	"$env:LOCALAPPDATA\Temp",
-	"$env:SystemRoot\Temp",
-	"$env:TEMP"
-)
-
-$script:EssentialServices = @(
-	'WinDefend','WdNisSvc','Sense','SecurityHealthService','MpsSvc','BFE','LanmanWorkstation','LanmanServer',
-	'Dhcp','Dnscache','NlaSvc','Netprofm','Netman','WlanSvc','RpcSs','EventLog','PlugPlay','ProfSvc','SamSs',
-	'LSM','TermService','WSearch','W32Time','wuauserv','UsoSvc','BITS','CryptSvc','TrustedInstaller','Schedule'
-)
-
-$script:Result = [ordered]@{
-	RunId = $script:RunId
-	StartedAt = $script:StartTime
-	EndedAt = $null
-	User = $script:CurrentUser
-	Machine = $script:Machine
-	DryRun = [bool]$DryRun
-	Force = [bool]$Force
-	Interactive = [bool]$script:IsInteractiveMode
-	Profile = $OptimizationProfile
-	Aggressive = [bool]$Aggressive
-	Hardware = $null
-	ActionsPerformed = New-Object System.Collections.Generic.List[string]
-	ActionsSkipped = New-Object System.Collections.Generic.List[string]
-	ActionsFailed = New-Object System.Collections.Generic.List[string]
-	FilesRemoved = New-Object System.Collections.Generic.List[string]
-	ServicesChanged = New-Object System.Collections.Generic.List[object]
-	DriversBackedUp = New-Object System.Collections.Generic.List[string]
-	DriversRemoved = New-Object System.Collections.Generic.List[string]
-	SfcResult = $null
-	DismResult = $null
-	Recommendations = New-Object System.Collections.Generic.List[string]
-	BackupArtifacts = New-Object System.Collections.Generic.List[string]
-	ManifestArtifacts = New-Object System.Collections.Generic.List[string]
-}
-
-function Initialize-RunFolders {
-	New-Item -Path $script:RunRoot -ItemType Directory -Force | Out-Null
-	New-Item -Path $script:ManifestRoot -ItemType Directory -Force | Out-Null
-	New-Item -Path $script:BackupRoot -ItemType Directory -Force | Out-Null
-}
-
-function Write-Log {
+	[CmdletBinding()]
 	param(
-		[Parameter(Mandatory)][string]$Message,
-		[ValidateSet('INFO','WARN','ERROR','SUCCESS','DEBUG')]
-		[string]$Level = 'INFO',
-		[string]$Category = 'General'
+		[Parameter(Mandatory = $true)]
+		[string]$ModuleName
 	)
 
-	$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
-	$line = "[$ts] [$Level] [Run:$script:RunId] [User:$script:CurrentUser] [Host:$script:Machine] [$Category] $Message"
-	Add-Content -Path $script:LogPath -Value $line
-	if ($Level -in @('ERROR','WARN')) {
-		Write-Host $line -ForegroundColor Yellow
-	}
-	elseif ($Level -eq 'SUCCESS') {
-		Write-Host $line -ForegroundColor Green
-	}
-	else {
-		Write-Host $line
+	[pscustomobject]@{
+		ModuleName     = $ModuleName
+		Success        = $true
+		ChangesApplied = @()
+		Warnings       = @()
+		Errors         = @()
+		RollbackSteps  = @()
+		StartedUtc     = (Get-Date).ToUniversalTime().ToString('o')
+		EndedUtc       = $null
 	}
 }
 
-function Add-ActionResult {
+function Write-LogUtc {
+<#
+.SYNOPSIS
+Writes a UTC timestamped log entry.
+
+.DESCRIPTION
+Appends a single UTF-8 log line with UTC timestamp and level to the active script log file.
+Logging is non-optional and used by all modules.
+
+.PARAMETER Message
+Log message content.
+
+.PARAMETER Level
+Log level label (INFO, WARN, ERROR).
+
+.EXAMPLE
+Write-LogUtc -Message 'Hardware profile collected.' -Level 'INFO'
+#>
+	[CmdletBinding()]
 	param(
-		[Parameter(Mandatory)][string]$Action,
-		[ValidateSet('Performed','Skipped','Failed')]
-		[string]$Status,
-		[string]$Reason
+		[Parameter(Mandatory = $true)]
+		[string]$Message,
+
+		[ValidateSet('INFO', 'WARN', 'ERROR')]
+		[string]$Level = 'INFO'
 	)
 
-	switch ($Status) {
-		'Performed' { $script:Result.ActionsPerformed.Add($Action) }
-		'Skipped' {
-			$skippedText = $Action
-			if ($Reason) {
-				$skippedText = "$Action ($Reason)"
-			}
-			$script:Result.ActionsSkipped.Add($skippedText)
-		}
-		'Failed' {
-			$failedText = $Action
-			if ($Reason) {
-				$failedText = "$Action ($Reason)"
-			}
-			$script:Result.ActionsFailed.Add($failedText)
-			if ($script:ExitCode -lt 1) { $script:ExitCode = 1 }
-		}
+	if (-not $script:LogFilePath) {
+		throw 'Log file path is not initialized. Call Initialize-ExecutionContext first.'
+	}
+
+	$utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+	$line = '{0} [{1}] {2}' -f $utc, $Level, $Message
+	Add-Content -Path $script:LogFilePath -Value $line -Encoding UTF8
+}
+
+function Initialize-ExecutionContext {
+<#
+.SYNOPSIS
+Initializes runtime folders, log file, and banner warnings.
+
+.DESCRIPTION
+Creates required directories (if missing), initializes log file path, and emits startup warning
+banners for operational modes such as AutoApprove and DryRun.
+
+.PARAMETER LogPath
+Log directory path.
+
+.PARAMETER BackupPath
+Backup directory path.
+
+.EXAMPLE
+Initialize-ExecutionContext -LogPath $LogPath -BackupPath $BackupPath
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$LogPath,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupPath
+	)
+
+	$script:ExecutionStartUtc = (Get-Date).ToUniversalTime()
+	$script:RunId = $script:ExecutionStartUtc.ToString('yyyyMMddTHHmmssZ')
+	$script:ResolvedLogPath = [System.IO.Path]::GetFullPath($LogPath)
+	$script:ResolvedBackupPath = [System.IO.Path]::GetFullPath($BackupPath)
+
+	if (-not (Test-Path -Path $script:ResolvedLogPath -PathType Container)) {
+		New-Item -Path $script:ResolvedLogPath -ItemType Directory -Force | Out-Null
+	}
+	if (-not (Test-Path -Path $script:ResolvedBackupPath -PathType Container)) {
+		New-Item -Path $script:ResolvedBackupPath -ItemType Directory -Force | Out-Null
+	}
+
+	$script:LogFilePath = Join-Path -Path $script:ResolvedLogPath -ChildPath ("Optimize-Windows10_{0}.log" -f $script:RunId)
+	New-Item -Path $script:LogFilePath -ItemType File -Force | Out-Null
+
+	Write-LogUtc -Message ('RunId={0}; DryRun={1}; AutoApprove={2}; Force={3}' -f $script:RunId, $DryRun.IsPresent, $AutoApprove.IsPresent, $Force.IsPresent)
+	Write-LogUtc -Message ('LogPath={0}; BackupPath={1}' -f $script:ResolvedLogPath, $script:ResolvedBackupPath)
+
+	if ($AutoApprove) {
+		Write-Warning 'AUTOAPPROVE ENABLED: Confirmation prompts are suppressed, but safety gates remain enforced.'
+		Write-LogUtc -Message 'AutoApprove banner displayed.' -Level 'WARN'
+	}
+	if ($DryRun) {
+		Write-Warning 'DRYRUN ENABLED: No changes will be made.'
+		Write-LogUtc -Message 'DryRun banner displayed.' -Level 'WARN'
 	}
 }
 
 function Test-IsAdministrator {
-	try {
-		$id = [Security.Principal.WindowsIdentity]::GetCurrent()
-		$principal = [Security.Principal.WindowsPrincipal]::new($id)
-		return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-	}
-	catch {
-		Write-Log -Message "Failed to evaluate admin role: $($_.Exception.Message)" -Level 'ERROR' -Category 'Preflight'
-		return $false
+<#
+.SYNOPSIS
+Checks whether the current PowerShell session is elevated.
+
+.DESCRIPTION
+Returns $true when running as Administrator; otherwise $false.
+
+.EXAMPLE
+if (-not (Test-IsAdministrator)) { throw 'Admin required.' }
+#>
+	[CmdletBinding()]
+	param()
+
+	$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+	$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+	return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-CommandAvailable {
+<#
+.SYNOPSIS
+Checks whether a command is available.
+
+.PARAMETER Name
+Command/cmdlet/executable name.
+
+.EXAMPLE
+Test-CommandAvailable -Name 'Get-ScheduledTask'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Name
+	)
+
+	return ($null -ne (Get-Command -Name $Name -ErrorAction Ignore))
+}
+
+function Test-ExecutionCapabilities {
+<#
+.SYNOPSIS
+Validates required and optional command availability.
+
+.DESCRIPTION
+Ensures required commands exist and logs warnings for optional capabilities that may be missing
+on specific Windows editions or PowerShell configurations.
+
+.EXAMPLE
+$cap = Test-ExecutionCapabilities
+#>
+	[CmdletBinding()]
+	param()
+
+	$required = @(
+		'Get-CimInstance',
+		'pnputil.exe',
+		'reg.exe',
+		'powercfg.exe',
+		'dism.exe',
+		'sfc.exe'
+	)
+
+	$optional = @(
+		'Get-AppxPackage',
+		'Get-ScheduledTask',
+		'Disable-ScheduledTask',
+		'Add-MpPreference',
+		'Remove-MpPreference',
+		'Delete-DeliveryOptimizationCache',
+		'Get-PnpDevice',
+		'Checkpoint-Computer',
+		'schtasks.exe',
+		'cleanmgr.exe',
+		'driverquery.exe'
+	)
+
+	$missingRequired = @($required | Where-Object { -not (Test-CommandAvailable -Name $_) })
+	$missingOptional = @($optional | Where-Object { -not (Test-CommandAvailable -Name $_) })
+
+	return [pscustomobject]@{
+		MissingRequired = $missingRequired
+		MissingOptional = $missingOptional
 	}
 }
 
-function Assert-Administrator {
-	if (-not (Test-IsAdministrator)) {
-		Write-Log -Message 'Administrator privileges are required. Re-run from an elevated PowerShell session.' -Level 'ERROR' -Category 'Preflight'
-		$script:ExitCode = 2
-		throw 'Not elevated.'
-	}
-}
+function Get-SelfTestStartupPreview {
+<#
+.SYNOPSIS
+Builds startup inventory and allowlist match preview for self-test mode.
 
-function Get-OsFacts {
-	$os = Get-CimInstance Win32_OperatingSystem
-	$cs = Get-CimInstance Win32_ComputerSystem
-	$cv = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+.DESCRIPTION
+Collects startup entries from registry and scheduled tasks when available, then computes
+which entries match StartupItemAllowList based on exact-name or regex mode.
 
-	[ordered]@{
-		Caption = $os.Caption
-		BuildNumber = [int]$os.BuildNumber
-		Ubr = [int]$cv.UBR
-		ProductName = [string]$cv.ProductName
-		DisplayVersion = [string]$cv.DisplayVersion
-		Architecture = [string]$os.OSArchitecture
-		DomainRole = [int]$cs.DomainRole
-	}
-}
+.EXAMPLE
+$preview = Get-SelfTestStartupPreview
+#>
+	[CmdletBinding()]
+	param()
 
-function Assert-OsCompatibility {
-	$facts = Get-OsFacts
-	$isMatch = $true
-	if ($facts.ProductName -notlike '*Windows 10 Pro*') { $isMatch = $false }
-	if ($facts.BuildNumber -ne $script:TargetOS.BuildNumber) { $isMatch = $false }
-	if ($facts.Ubr -ne $script:TargetOS.Ubr) { $isMatch = $false }
-	if ($facts.Architecture -notlike '*64*') { $isMatch = $false }
-	if ($facts.DisplayVersion -ne $script:TargetOS.ReleaseId) { $isMatch = $false }
+	$items = @()
+	$warnings = @()
 
-	if (-not $isMatch) {
-		$msg = "OS mismatch. Required: Windows 10 Pro 22H2 build 19045.7058 x64. Detected: $($facts.ProductName) $($facts.DisplayVersion) build $($facts.BuildNumber).$($facts.Ubr) $($facts.Architecture)."
-		if ($OverrideOSCheck) {
-			Write-Log -Message "$msg Continuing due to -OverrideOSCheck." -Level 'WARN' -Category 'Preflight'
-			$script:Result.Recommendations.Add('Ran with OS override; review results carefully for compatibility.')
+	$runPaths = @(
+		'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+		'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+	)
+
+	foreach ($path in $runPaths) {
+		if (-not (Test-Path -Path $path)) { continue }
+		try {
+			$props = Get-ItemProperty -Path $path -ErrorAction Stop
+			foreach ($p in $props.PSObject.Properties) {
+				if ($p.Name -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { continue }
+				$items += [pscustomobject]@{
+					Type     = 'RegistryRun'
+					Name     = [string]$p.Name
+					Location = $path
+				}
+			}
 		}
-		else {
-			Write-Log -Message $msg -Level 'ERROR' -Category 'Preflight'
-			$script:ExitCode = 2
-			throw 'OS compatibility check failed.'
+		catch {
+			$warnings += ("Failed reading startup registry path {0}: {1}" -f $path, $_.Exception.Message)
+		}
+	}
+
+	if (Test-CommandAvailable -Name 'Get-ScheduledTask') {
+		try {
+			$tasks = Get-ScheduledTask -ErrorAction Stop | Where-Object {
+				$_.State -ne 'Disabled' -and $_.TaskPath -notlike '\\Microsoft\\Windows\\*'
+			}
+
+			foreach ($t in $tasks) {
+				$items += [pscustomobject]@{
+					Type     = 'ScheduledTask'
+					Name     = [string]$t.TaskName
+					Location = [string]$t.TaskPath
+				}
+			}
+		}
+		catch {
+			$warnings += ("Failed reading scheduled tasks for self-test preview: {0}" -f $_.Exception.Message)
 		}
 	}
 	else {
-		Write-Log -Message 'Target OS check passed.' -Level 'SUCCESS' -Category 'Preflight'
-	}
-}
-
-function Confirm-Step {
-	param(
-		[Parameter(Mandatory)][string]$Title,
-		[string]$Warning,
-		[switch]$Permanent
-	)
-
-	if ($Force) {
-		Write-Log -Message "Auto-confirmed due to -Force: $Title" -Category 'Confirm'
-		return $true
+		$warnings += 'Get-ScheduledTask is unavailable; scheduled task startup preview skipped.'
 	}
 
-	if (-not $script:IsInteractiveMode) {
-		Write-Log -Message "Non-interactive mode without -Force: skipping '$Title'." -Level 'WARN' -Category 'Confirm'
-		return $false
-	}
-
-	$prompt = $Title
-	if ($Permanent) {
-		$prompt = "[PERMANENT] $Title"
-	}
-	if ($Warning) {
-		Write-Host "WARNING: $Warning" -ForegroundColor Yellow
-	}
-	$choice = Read-Host "$prompt (Y/N)"
-	return $choice -match '^(Y|y|Yes|YES)$'
-}
-
-function Test-PathAllowListed {
-	param([Parameter(Mandatory)][string]$Path)
-
-	foreach ($allowed in $AllowListPath) {
-		if ([string]::IsNullOrWhiteSpace($allowed)) { continue }
-		try {
-			$resolvedAllowed = [IO.Path]::GetFullPath($allowed)
-			$resolvedPath = [IO.Path]::GetFullPath($Path)
-			if ($resolvedPath.StartsWith($resolvedAllowed, [System.StringComparison]::OrdinalIgnoreCase)) {
-				return $true
+	$matches = @()
+	if ($StartupItemAllowList.Count -gt 0) {
+		if ($StartupItemAllowListIsRegex) {
+			$patterns = @()
+			foreach ($entry in $StartupItemAllowList) {
+				try {
+					$patterns += [regex]::new($entry, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+				}
+				catch {
+					$warnings += ("Invalid startup allowlist regex skipped: {0}; Reason: {1}" -f $entry, $_.Exception.Message)
+				}
 			}
-		}
-		catch {
-			continue
-		}
-	}
-	return $false
-}
 
-function Test-ProtectedPath {
-	param([Parameter(Mandatory)][string]$Path)
-
-	try {
-		$full = [IO.Path]::GetFullPath($Path)
-	}
-	catch {
-		return $true
-	}
-
-	foreach ($root in $script:ProtectedRoots) {
-		if ([string]::IsNullOrWhiteSpace($root)) { continue }
-		$resolvedRoot = [IO.Path]::GetFullPath($root)
-		if ($full.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-			if (Test-PathAllowListed -Path $full) {
-				return $false
-			}
-			return $true
-		}
-	}
-	return $false
-}
-
-function Export-Manifest {
-	param(
-		[Parameter(Mandatory)][string]$Name,
-		[Parameter(Mandatory)][System.Collections.IEnumerable]$Items
-	)
-
-	$rows = foreach ($item in $Items) {
-		if ($null -eq $item) { continue }
-		if ($item -is [string]) {
-			[PSCustomObject]@{
-				Path = $item
-				Exists = Test-Path -LiteralPath $item
-				Timestamp = (Get-Date)
-			}
+			$matches = @($items | Where-Object {
+				$itemName = [string]$_.Name
+				$matched = $false
+				foreach ($rx in $patterns) {
+					if ($rx.IsMatch($itemName)) {
+						$matched = $true
+						break
+					}
+				}
+				$matched
+			})
 		}
 		else {
-			$item
-		}
-	}
-
-	$jsonPath = Join-Path $script:ManifestRoot "$Name.json"
-	$csvPath = Join-Path $script:ManifestRoot "$Name.csv"
-
-	$rows | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
-	$rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-	$script:Result.ManifestArtifacts.Add($jsonPath)
-	$script:Result.ManifestArtifacts.Add($csvPath)
-	Write-Log -Message "Manifest exported: $jsonPath ; $csvPath" -Category 'Manifest'
-}
-
-function Invoke-ExternalCommand {
-	param(
-		[Parameter(Mandatory)][string]$FilePath,
-		[Parameter()][string[]]$ArgumentList = @(),
-		[Parameter(Mandatory)][string]$Name
-	)
-
-	$stdOut = Join-Path $script:RunRoot "$Name.stdout.log"
-	$stdErr = Join-Path $script:RunRoot "$Name.stderr.log"
-
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would run: $FilePath $($ArgumentList -join ' ')" -Category 'Command'
-		return [PSCustomObject]@{ ExitCode = 0; StdOut = $stdOut; StdErr = $stdErr; DryRun = $true }
-	}
-
-	$proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdOut -RedirectStandardError $stdErr
-	Write-Log -Message "Command completed [$Name] ExitCode=$($proc.ExitCode). Output: $stdOut" -Category 'Command'
-
-	[PSCustomObject]@{
-		ExitCode = $proc.ExitCode
-		StdOut = $stdOut
-		StdErr = $stdErr
-		DryRun = $false
-	}
-}
-
-function Test-PendingReboot {
-	$keys = @(
-		'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
-		'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-		'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-	)
-	$pending = $false
-	foreach ($key in $keys) {
-		if (Test-Path -LiteralPath $key) {
-			if ($key -like '*Session Manager') {
-				$value = (Get-ItemProperty -Path $key -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
-				if ($value) { $pending = $true }
+			$set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+			foreach ($entry in $StartupItemAllowList) {
+				[void]$set.Add($entry)
 			}
-			else {
-				$pending = $true
-			}
+
+			$matches = @($items | Where-Object { $set.Contains([string]$_.Name) })
 		}
 	}
-	return $pending
+
+	return [pscustomobject]@{
+		Items    = $items
+		Matches  = $matches
+		Warnings = $warnings
+	}
 }
 
-function Test-UpdateInProgress {
-	$procs = @('TiWorker','TrustedInstaller','MoUsoCoreWorker','MusNotification','wuauclt')
-	foreach ($name in $procs) {
-		if (Get-Process -Name $name -ErrorAction SilentlyContinue) {
-			return $true
+function Get-SelfTestGuidancePanel {
+<#
+.SYNOPSIS
+Returns guidance text for interpreting self-test output.
+
+.EXAMPLE
+$panel = Get-SelfTestGuidancePanel
+#>
+	[CmdletBinding()]
+	param()
+
+	return @"
+SELF-TEST GUIDANCE
+------------------
+Purpose:
+- Read-only preflight validation before any optimization modules run.
+
+Key report fields:
+- CapabilitySummary.MissingRequired:
+  Commands that must exist for full script execution. Non-empty means the script is not runnable as designed.
+- CapabilitySummary.MissingOptional:
+  Features that degrade gracefully if unavailable on this machine/edition.
+- StartupInventorySummary.TotalItems:
+  Count of discovered startup entries (registry + non-Microsoft scheduled tasks where available).
+- StartupInventorySummary.AllowListMatchedItems:
+  Entries currently matched by StartupItemAllowList and mode (exact or regex).
+- StartupInventorySummary.MatchMode:
+  'ExactNameCaseInsensitive' or 'Regex'.
+- Warnings:
+  Collection/preview warnings that did not stop the self-test.
+
+How to use results:
+1) Resolve missing required commands before live runs.
+2) Review allowlist matches; ensure only intended startup entries are matched.
+3) Use report JSON in LogPath for baseline comparison across machines.
+"@
+}
+
+function Invoke-SelfTestMode {
+<#
+.SYNOPSIS
+Runs read-only self-test and writes a structured report.
+
+.EXAMPLE
+$r = Invoke-SelfTestMode
+#>
+	[CmdletBinding()]
+	param()
+
+	Write-LogUtc -Message 'SelfTest mode started. No optimization modules will run.' -Level 'WARN'
+
+	$capabilities = Test-ExecutionCapabilities
+	$os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+	$startupPreview = Get-SelfTestStartupPreview
+	$guidance = Get-SelfTestGuidancePanel
+
+	$report = [pscustomobject]@{
+		RunId = $script:RunId
+		GeneratedUtc = (Get-Date).ToUniversalTime().ToString('o')
+		Hostname = $env:COMPUTERNAME
+		PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+		PowerShellEdition = $PSVersionTable.PSEdition
+		IsAdministrator = (Test-IsAdministrator)
+		OS = [pscustomobject]@{
+			Caption = $(if ($os) { $os.Caption } else { $null })
+			Version = $(if ($os) { $os.Version } else { $null })
+			BuildNumber = $(if ($os) { $os.BuildNumber } else { $null })
 		}
+		Parameters = [pscustomobject]@{
+			DryRun = $DryRun.IsPresent
+			AutoApprove = $AutoApprove.IsPresent
+			Force = $Force.IsPresent
+			OptimizeStartupItems = $OptimizeStartupItems.IsPresent
+			StartupItemAllowList = $StartupItemAllowList
+			StartupItemAllowListIsRegex = $StartupItemAllowListIsRegex.IsPresent
+		}
+		CapabilitySummary = [pscustomobject]@{
+			MissingRequired = $capabilities.MissingRequired
+			MissingRequiredCount = $capabilities.MissingRequired.Count
+			MissingOptional = $capabilities.MissingOptional
+			MissingOptionalCount = $capabilities.MissingOptional.Count
+		}
+		StartupInventorySummary = [pscustomobject]@{
+			TotalItems = $startupPreview.Items.Count
+			AllowListMatchedItems = $startupPreview.Matches.Count
+			MatchMode = $(if ($StartupItemAllowListIsRegex) { 'Regex' } else { 'ExactNameCaseInsensitive' })
+		}
+		StartupAllowListMatches = @($startupPreview.Matches | Select-Object Type, Name, Location)
+		Warnings = @($startupPreview.Warnings)
 	}
-	return $false
+
+	$reportPath = Join-Path -Path $script:ResolvedLogPath -ChildPath ("SelfTestReport_{0}.json" -f $script:RunId)
+	$report | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding UTF8
+	Write-LogUtc -Message ("SelfTest report written: {0}" -f $reportPath)
+
+	Write-Host ''
+	Write-Host '=== SELF-TEST SUMMARY ==='
+	Write-Host ("RunId: {0}" -f $report.RunId)
+	Write-Host ("Report: {0}" -f $reportPath)
+	Write-Host ("MissingRequiredCount: {0}" -f $report.CapabilitySummary.MissingRequiredCount)
+	Write-Host ("MissingOptionalCount: {0}" -f $report.CapabilitySummary.MissingOptionalCount)
+	Write-Host ("StartupTotalItems: {0}" -f $report.StartupInventorySummary.TotalItems)
+	Write-Host ("StartupAllowListMatchedItems: {0}" -f $report.StartupInventorySummary.AllowListMatchedItems)
+
+	if ($report.StartupAllowListMatches.Count -gt 0) {
+		Write-Host ''
+		Write-Host 'Startup allowlist matches preview:'
+		Write-Host ($report.StartupAllowListMatches | Format-Table -AutoSize | Out-String)
+	}
+
+	Write-Host ''
+	Write-Host $guidance
+
+	return [pscustomobject]@{
+		ReportPath = $reportPath
+		MissingRequiredCount = $report.CapabilitySummary.MissingRequiredCount
+		MissingOptionalCount = $report.CapabilitySummary.MissingOptionalCount
+	}
 }
 
-function Assert-UpdateSafeState {
-	$pendingReboot = Test-PendingReboot
-	$updateBusy = Test-UpdateInProgress
+function Test-OSBuildCompliance {
+<#
+.SYNOPSIS
+Validates the target OS build requirement.
 
-	if ($pendingReboot -or $updateBusy) {
-		$reason = @()
-		if ($pendingReboot) { $reason += 'pending reboot detected' }
-		if ($updateBusy) { $reason += 'update installation currently active' }
-		$message = "Update-safe-state check failed: $($reason -join '; ')."
-		Write-Log -Message $message -Level 'ERROR' -Category 'Preflight'
-		Write-Log -Message 'Abort and re-run after reboot/update completion. Optionally schedule this script post-reboot.' -Level 'WARN' -Category 'Preflight'
-		$script:ExitCode = 2
-		throw $message
-	}
-}
+.DESCRIPTION
+Confirms Windows 10 build 19045 unless IgnoreOSCheck is specified.
 
-function Test-FreeSpace {
+.PARAMETER IgnoreOSCheck
+Skips strict validation and returns warning state.
+
+.EXAMPLE
+$check = Test-OSBuildCompliance -IgnoreOSCheck:$IgnoreOSCheck
+#>
+	[CmdletBinding()]
 	param(
-		[int]$MinimumGB = 2,
-		[string]$DriveLetter = ($env:SystemDrive -replace ':','')
+		[switch]$IgnoreOSCheck
 	)
-	$drive = Get-PSDrive -Name $DriveLetter
-	return ($drive.Free / 1GB) -ge $MinimumGB
+
+	$result = [pscustomobject]@{
+		IsCompliant = $false
+		WarningOnly = $false
+		Caption     = $null
+		Version     = $null
+		BuildNumber = $null
+		Message     = $null
+	}
+
+	$os = Get-CimInstance -ClassName Win32_OperatingSystem
+	$result.Caption = $os.Caption
+	$result.Version = $os.Version
+	$result.BuildNumber = [int]$os.BuildNumber
+
+	if ($result.BuildNumber -eq 19045) {
+		$result.IsCompliant = $true
+		$result.Message = 'OS build validation passed (19045).'
+		return $result
+	}
+
+	if ($IgnoreOSCheck) {
+		$result.IsCompliant = $true
+		$result.WarningOnly = $true
+		$result.Message = ('OS build validation bypassed by IgnoreOSCheck. Detected build: {0}' -f $result.BuildNumber)
+		return $result
+	}
+
+	$result.Message = ('Unsupported OS build. Required: 19045. Detected: {0}' -f $result.BuildNumber)
+	return $result
 }
 
-function New-SystemRestorePoint {
-	$desc = "Optimize-Windows-$script:Stamp"
+function Get-FirmwareTypeLabel {
+<#
+.SYNOPSIS
+Returns firmware type as UEFI or BIOS.
+
+.DESCRIPTION
+Maps system firmware type from Win32_ComputerSystem to UEFI/BIOS where possible.
+
+.EXAMPLE
+$type = Get-FirmwareTypeLabel
+#>
+	[CmdletBinding()]
+	param()
+
+	$firmware = $null
 	try {
-		if ($DryRun) {
-			Write-Log -Message "[DryRun] Would create system restore point: $desc" -Category 'RestorePoint'
-			Add-ActionResult -Action 'System restore point' -Status 'Skipped' -Reason 'DryRun'
-			return
+		$firmwareReg = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'PEFirmwareType' -ErrorAction Stop
+		switch ([int]$firmwareReg.PEFirmwareType) {
+			1 { $firmware = 'BIOS' }
+			2 { $firmware = 'UEFI' }
+			default { $firmware = 'Unknown' }
 		}
-
-		if (-not (Test-FreeSpace -MinimumGB 2)) {
-			throw 'Insufficient disk space for reliable safety backups/restore operations (<2 GB free on current drive).'
-		}
-
-		Checkpoint-Computer -Description $desc -RestorePointType 'MODIFY_SETTINGS' | Out-Null
-		Write-Log -Message 'System restore point created successfully.' -Level 'SUCCESS' -Category 'RestorePoint'
-		Add-ActionResult -Action 'System restore point' -Status 'Performed'
 	}
 	catch {
-		$msg = "System restore point unavailable: $($_.Exception.Message)"
-		if ($OverrideSafety) {
-			Write-Log -Message "$msg Continuing due to -OverrideSafety." -Level 'WARN' -Category 'RestorePoint'
-			Add-ActionResult -Action 'System restore point' -Status 'Skipped' -Reason 'OverrideSafety'
-			$script:Result.Recommendations.Add('Restore point was not created; ensure offline backup exists before future runs.')
-		}
-		else {
-			Write-Log -Message "$msg Use -OverrideSafety to continue without restore point." -Level 'ERROR' -Category 'RestorePoint'
-			$script:ExitCode = 2
-			throw 'Restore point requirement not met.'
-		}
+		$firmware = 'Unknown'
 	}
+
+	return $firmware
+}
+
+function Get-GPUVendorClass {
+<#
+.SYNOPSIS
+Classifies primary GPU vendor.
+
+.DESCRIPTION
+Maps video controller adapter compatibility text to NVIDIA, AMD, Intel, or Other.
+
+.EXAMPLE
+$gpuVendor = Get-GPUVendorClass
+#>
+	[CmdletBinding()]
+	param()
+
+	$gpu = Get-CimInstance -ClassName Win32_VideoController | Select-Object -First 1
+	if ($null -eq $gpu) { return 'Other' }
+
+	$source = ($gpu.AdapterCompatibility + ' ' + $gpu.Name).ToLowerInvariant()
+
+	if ($source -match 'nvidia') { return 'NVIDIA' }
+	if ($source -match 'advanced micro devices|amd|radeon') { return 'AMD' }
+	if ($source -match 'intel') { return 'Intel' }
+	return 'Other'
+}
+
+function Get-StorageTypeMap {
+<#
+.SYNOPSIS
+Builds per-volume storage media type map.
+
+.DESCRIPTION
+Uses CIM disk and partition relationships to estimate SSD/HDD classification per drive letter.
+
+.EXAMPLE
+$map = Get-StorageTypeMap
+#>
+	[CmdletBinding()]
+	param()
+
+	$map = @{}
+	$logicalDisks = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3"
+	$drives = Get-CimInstance -ClassName Win32_DiskDrive
+
+	$diskToMedia = @{}
+	foreach ($drive in $drives) {
+		$media = 'Unknown'
+		$modelText = ($drive.Model + ' ' + $drive.MediaType).ToLowerInvariant()
+		if ($modelText -match 'ssd|nvme|solid state') {
+			$media = 'SSD'
+		}
+		elseif ($modelText -match 'hdd|hard disk|rotational') {
+			$media = 'HDD'
+		}
+		$diskToMedia[$drive.DeviceID] = $media
+	}
+
+	foreach ($ld in $logicalDisks) {
+		$driveLetter = $ld.DeviceID
+		$mediaType = 'Unknown'
+
+		$partitionRefs = Get-CimAssociatedInstance -InputObject $ld -Association Win32_LogicalDiskToPartition -ErrorAction SilentlyContinue
+		foreach ($partition in $partitionRefs) {
+			$diskRefs = Get-CimAssociatedInstance -InputObject $partition -Association Win32_DiskDriveToDiskPartition -ErrorAction SilentlyContinue
+			foreach ($disk in $diskRefs) {
+				if ($diskToMedia.ContainsKey($disk.DeviceID)) {
+					$mediaType = $diskToMedia[$disk.DeviceID]
+					break
+				}
+			}
+			if ($mediaType -ne 'Unknown') { break }
+		}
+
+		if ($mediaType -eq 'Unknown') {
+			$mediaType = 'HDD'
+		}
+
+		$map[$driveLetter] = $mediaType
+	}
+
+	return $map
 }
 
 function Get-HardwareProfile {
-	$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-	$mem = Get-CimInstance Win32_ComputerSystem
-	$disks = Get-CimInstance Win32_DiskDrive
+<#
+.SYNOPSIS
+Collects hardware profile needed for downstream module decisions.
 
-	$storageType = 'Unknown'
-	if (Get-Command -Name Get-PhysicalDisk -ErrorAction SilentlyContinue) {
-		$media = Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object -ExpandProperty MediaType -ErrorAction SilentlyContinue
-		if ($media -contains 'SSD') { $storageType = 'SSD' }
-		elseif ($media -contains 'HDD' -or $media -contains 'Unspecified') { $storageType = 'HDD' }
-	}
-	elseif ($disks.Model -match 'SSD|NVMe') {
-		$storageType = 'SSD'
-	}
-	elseif ($disks) {
-		$storageType = 'HDD'
+.DESCRIPTION
+Builds a profile containing storage class per volume, RAM, CPU core counts, firmware mode,
+free space per volume, and GPU vendor. Uses CIM-based queries for hardware data.
+
+.EXAMPLE
+$hardware = Get-HardwareProfile
+#>
+	[CmdletBinding()]
+	param()
+
+	$computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
+	$processors = Get-CimInstance -ClassName Win32_Processor
+	$logicalDisks = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3"
+
+	$totalPhysicalCores = 0
+	$totalLogicalCores = 0
+	foreach ($cpu in $processors) {
+		$totalPhysicalCores += [int]$cpu.NumberOfCores
+		$totalLogicalCores += [int]$cpu.NumberOfLogicalProcessors
 	}
 
-	$ramGb = [math]::Round(($mem.TotalPhysicalMemory / 1GB), 2)
-	$aggressiveness = 'Balanced'
-	if ($Aggressive) {
-		$aggressiveness = 'Aggressive'
-	}
-	elseif ($ramGb -lt 8 -or $storageType -eq 'HDD') {
-		$aggressiveness = 'Conservative'
+	$freeSpaceMap = @{}
+	foreach ($disk in $logicalDisks) {
+		$freeGB = [math]::Round(($disk.FreeSpace / 1GB), 2)
+		$freeSpaceMap[$disk.DeviceID] = $freeGB
 	}
 
-	$obj = [PSCustomObject]@{
-		CpuCores = [int]$cpu.NumberOfCores
-		LogicalProcessors = [int]$cpu.NumberOfLogicalProcessors
-		RamGB = $ramGb
-		StorageType = $storageType
-		Aggressiveness = $aggressiveness
+	$profile = [pscustomobject]@{
+		StorageType  = Get-StorageTypeMap
+		TotalRAMgb   = [math]::Round(($computerSystem.TotalPhysicalMemory / 1GB), 2)
+		CPUCores     = [pscustomobject]@{
+			Physical = $totalPhysicalCores
+			Logical  = $totalLogicalCores
+		}
+		FirmwareType = Get-FirmwareTypeLabel
+		FreeSpaceMap = $freeSpaceMap
+		GPUVendor    = Get-GPUVendorClass
 	}
-	$script:Result.Hardware = $obj
-	Write-Log -Message "Hardware profile: Cores=$($obj.CpuCores), RAM=$($obj.RamGB)GB, Storage=$($obj.StorageType), Mode=$($obj.Aggressiveness)." -Category 'Hardware'
+
+	return $profile
 }
 
-function Get-SafeDeletionTargets {
+function Test-SystemDriveFreeSpace {
+<#
+.SYNOPSIS
+Validates minimum free space on system drive.
+
+.DESCRIPTION
+Requires at least 2 GB free on system drive or script aborts.
+
+.PARAMETER HardwareProfile
+Hardware profile object containing FreeSpaceMap.
+
+.EXAMPLE
+Test-SystemDriveFreeSpace -HardwareProfile $HardwareProfile
+#>
+	[CmdletBinding()]
 	param(
-		[Parameter(Mandatory)][string[]]$Roots,
-		[int]$OlderThanDays = 0
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile
 	)
 
-	$threshold = (Get-Date).AddDays(-$OlderThanDays)
-	$targets = New-Object System.Collections.Generic.List[string]
-	foreach ($root in $Roots) {
-		if (-not (Test-Path -LiteralPath $root)) { continue }
-		try {
-			$items = Get-ChildItem -LiteralPath $root -Force -Recurse -ErrorAction SilentlyContinue
-			foreach ($item in $items) {
-				if ($item.PSIsContainer) { continue }
-				if ($OlderThanDays -gt 0 -and $item.LastWriteTime -gt $threshold) { continue }
-				if (Test-ProtectedPath -Path $item.FullName) { continue }
-				$targets.Add($item.FullName)
-			}
-		}
-		catch {
-			Write-Log -Message "Failed enumerating $root : $($_.Exception.Message)" -Level 'WARN' -Category 'Cleanup'
-		}
+	$systemDrive = [System.Environment]::GetEnvironmentVariable('SystemDrive')
+	if ([string]::IsNullOrWhiteSpace($systemDrive)) {
+		throw 'Unable to determine system drive.'
 	}
-	return $targets
+
+	if (-not $HardwareProfile.FreeSpaceMap.ContainsKey($systemDrive)) {
+		throw ("System drive {0} not found in FreeSpaceMap." -f $systemDrive)
+	}
+
+	$freeGb = [double]$HardwareProfile.FreeSpaceMap[$systemDrive]
+	if ($freeGb -lt 2.0) {
+		throw ("System drive free space is below 2 GB. Detected: {0} GB." -f $freeGb)
+	}
+
+	Write-LogUtc -Message ("System drive free space check passed: {0}={1} GB" -f $systemDrive, $freeGb)
 }
 
-function Remove-TargetsWithManifest {
+#endregion Core Utilities
+
+#region Module 1
+
+function Invoke-Module1EnvironmentAndHardwareDetection {
+<#
+.SYNOPSIS
+Runs Module 1 environment and hardware detection.
+
+.DESCRIPTION
+Validates elevation and OS target requirements, gathers CIM-based hardware profile, and enforces
+minimum free space threshold on system drive.
+
+.PARAMETER IgnoreOSCheck
+Skips strict build validation and logs warning if set.
+
+.EXAMPLE
+$module1 = Invoke-Module1EnvironmentAndHardwareDetection -IgnoreOSCheck:$IgnoreOSCheck
+#>
+	[CmdletBinding()]
 	param(
-		[Parameter(Mandatory)][string]$ActionName,
-		[Parameter(Mandatory)][System.Collections.Generic.List[string]]$Targets,
-		[string]$Category = 'Cleanup'
+		[switch]$IgnoreOSCheck
 	)
 
-	if ($Targets.Count -eq 0) {
-		Write-Log -Message "No targets found for $ActionName." -Category $Category
-		Add-ActionResult -Action $ActionName -Status 'Skipped' -Reason 'NoTargets'
-		return
-	}
+	$result = New-ModuleResult -ModuleName 'Module1-EnvironmentAndHardwareDetection'
 
-	Export-Manifest -Name ($ActionName -replace '\s+','_') -Items $Targets
-
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would remove $($Targets.Count) items for '$ActionName'." -Category $Category
-		Add-ActionResult -Action $ActionName -Status 'Skipped' -Reason 'DryRun'
-		return
-	}
-
-	$removed = 0
-	foreach ($target in $Targets) {
-		try {
-			Remove-Item -LiteralPath $target -Force -ErrorAction Stop
-			$script:Result.FilesRemoved.Add($target)
-			$removed++
-		}
-		catch {
-			Write-Log -Message "Failed removing $target : $($_.Exception.Message)" -Level 'WARN' -Category $Category
-		}
-	}
-
-	Write-Log -Message "Removed $removed items for '$ActionName'." -Category $Category
-	Add-ActionResult -Action $ActionName -Status 'Performed'
-}
-
-function Invoke-SystemFileValidation {
-	Write-Log -Message 'Starting system file validation (SFC + DISM RestoreHealth).' -Category 'Health'
 	try {
-		$sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -Name 'sfc_scannow'
-		$dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -Name 'dism_restorehealth'
-		$script:Result.SfcResult = $sfc
-		$script:Result.DismResult = $dism
-		Add-ActionResult -Action 'System file validation' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "System file validation failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Health'
-		Add-ActionResult -Action 'System file validation' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
+		if (-not (Test-IsAdministrator)) {
+			throw 'Administrator privileges are required. Re-run in an elevated PowerShell session.'
+		}
+		Write-LogUtc -Message 'Elevation check passed.'
 
-function Invoke-ComponentStoreCleanup {
-	Write-Log -Message 'Running component store cleanup.' -Category 'DISM'
-	try {
-		Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/StartComponentCleanup') -Name 'dism_startcomponentcleanup' | Out-Null
-		Add-ActionResult -Action 'Component store cleanup' -Status 'Performed'
+		$capabilities = Test-ExecutionCapabilities
+		if ($capabilities.MissingRequired.Count -gt 0) {
+			throw ('Missing required command(s): {0}' -f ($capabilities.MissingRequired -join ', '))
+		}
+		if ($capabilities.MissingOptional.Count -gt 0) {
+			$result.Warnings += ('Missing optional command(s): {0}' -f ($capabilities.MissingOptional -join ', '))
+			Write-LogUtc -Message ('Missing optional command(s): {0}' -f ($capabilities.MissingOptional -join ', ')) -Level 'WARN'
+		}
 
-		if (Confirm-Step -Title 'Run DISM /ResetBase (permanent; uninstall rollback for superseded components becomes unavailable)' -Warning 'This is permanent for superseded component versions.' -Permanent) {
-			$reset = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/StartComponentCleanup','/ResetBase') -Name 'dism_resetbase'
-			if ($reset.ExitCode -eq 0) {
-				Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Performed'
-			}
-			else {
-				Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Failed' -Reason "ExitCode=$($reset.ExitCode)"
-			}
+		$osCheck = Test-OSBuildCompliance -IgnoreOSCheck:$IgnoreOSCheck
+		if (-not $osCheck.IsCompliant) {
+			throw $osCheck.Message
+		}
+		if ($osCheck.WarningOnly) {
+			$result.Warnings += $osCheck.Message
+			Write-LogUtc -Message $osCheck.Message -Level 'WARN'
 		}
 		else {
-			Add-ActionResult -Action 'Component cleanup ResetBase' -Status 'Skipped' -Reason 'UserDeclined'
+			Write-LogUtc -Message $osCheck.Message
 		}
+
+		$hardwareProfile = Get-HardwareProfile
+		Test-SystemDriveFreeSpace -HardwareProfile $hardwareProfile
+
+		$result.ChangesApplied += 'Hardware profile collected and validated.'
+		$result.ChangesApplied += ('Detected GPUVendor={0}; FirmwareType={1}; RAM={2}GB' -f $hardwareProfile.GPUVendor, $hardwareProfile.FirmwareType, $hardwareProfile.TotalRAMgb)
+		$result | Add-Member -MemberType NoteProperty -Name HardwareProfile -Value $hardwareProfile -Force
+
+		Write-LogUtc -Message 'Module 1 completed successfully.'
 	}
 	catch {
-		Write-Log -Message "Component cleanup error: $($_.Exception.Message)" -Level 'ERROR' -Category 'DISM'
-		Add-ActionResult -Action 'Component store cleanup' -Status 'Failed' -Reason $_.Exception.Message
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ('Module 1 failed: {0}' -f $_.Exception.Message) -Level 'ERROR'
 	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
 }
 
-function Invoke-WindowsUpdateCleanup {
-	Write-Log -Message 'Preparing Windows Update cache cleanup.' -Category 'WindowsUpdate'
-	$downloadPath = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
+#endregion Module 1
 
-	try {
-		Assert-UpdateSafeState
+#region Module 2 Helpers
 
-		if (-not (Confirm-Step -Title "Clear Windows Update download cache at $downloadPath" -Warning 'Ensures no active update operation first.')) {
-			Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
+function Add-DefenderPathExclusion {
+<#
+.SYNOPSIS
+Adds a Windows Defender exclusion path with tracking.
 
-		if (-not (Test-Path -LiteralPath $downloadPath)) {
-			Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Skipped' -Reason 'PathMissing'
-			return
-		}
+.DESCRIPTION
+Adds exclusion entries for paths required by this script and records each successful addition
+for guaranteed removal in the final cleanup block.
 
-		$targets = Get-ChildItem -LiteralPath $downloadPath -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | ForEach-Object FullName
-		$targetList = New-Object System.Collections.Generic.List[string]
-		foreach ($t in $targets) { if (-not (Test-ProtectedPath -Path $t)) { $targetList.Add($t) } }
+.PARAMETER Path
+Absolute path to exclude.
 
-		if (-not $DryRun) {
-			Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-			Stop-Service -Name bits -Force -ErrorAction SilentlyContinue
-		}
+.EXAMPLE
+Add-DefenderPathExclusion -Path $script:ResolvedBackupPath
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Path
+	)
 
-		Remove-TargetsWithManifest -ActionName 'Windows Update Download Cache' -Targets $targetList -Category 'WindowsUpdate'
-
-		if (-not $DryRun) {
-			Start-Service -Name bits -ErrorAction SilentlyContinue
-			Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-		}
+	if (-not (Test-Path -Path $Path)) {
+		New-Item -Path $Path -ItemType Directory -Force | Out-Null
 	}
-	catch {
-		Write-Log -Message "Windows Update cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'WindowsUpdate'
-		Add-ActionResult -Action 'Windows Update download cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
 
-function Invoke-DeliveryOptimizationCleanup {
-	$doPath = Join-Path $env:SystemRoot 'SoftwareDistribution\DeliveryOptimization'
-	Write-Log -Message "Preparing Delivery Optimization cleanup at $doPath" -Category 'DeliveryOptimization'
-	try {
-		if (-not (Confirm-Step -Title 'Clear Delivery Optimization cache' -Warning 'This will remove locally cached delivery optimization content.')) {
-			Add-ActionResult -Action 'Delivery Optimization cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-		$targets = New-Object System.Collections.Generic.List[string]
-		if (Test-Path -LiteralPath $doPath) {
-			Get-ChildItem -LiteralPath $doPath -Force -Recurse -ErrorAction SilentlyContinue |
-				Where-Object { -not $_.PSIsContainer } |
-				ForEach-Object {
-					if (-not (Test-ProtectedPath -Path $_.FullName)) { $targets.Add($_.FullName) }
-				}
-		}
-		Remove-TargetsWithManifest -ActionName 'Delivery Optimization Cache' -Targets $targets -Category 'DeliveryOptimization'
+	if (-not $script:DefenderExclusionsAdded) {
+		$script:DefenderExclusionsAdded = @()
 	}
-	catch {
-		Write-Log -Message "Delivery Optimization cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'DeliveryOptimization'
-		Add-ActionResult -Action 'Delivery Optimization cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
 
-function Invoke-TemporaryFilesCleanup {
-	Write-Log -Message "Cleaning temporary files older than $TempAgeDays day(s)." -Category 'Temp'
-	try {
-		$roots = @($env:SystemRoot + '\Temp', $env:TEMP, "$env:LOCALAPPDATA\Temp") | Select-Object -Unique
-		$targets = Get-SafeDeletionTargets -Roots $roots -OlderThanDays $TempAgeDays
-		Remove-TargetsWithManifest -ActionName 'Temporary Files Cleanup' -Targets $targets -Category 'Temp'
-	}
-	catch {
-		Write-Log -Message "Temporary cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Temp'
-		Add-ActionResult -Action 'Temporary files cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-ThumbnailAndBrowserCacheCleanup {
-	Write-Log -Message 'Preparing thumbnail and browser cache cleanup.' -Category 'Cache'
-	try {
-		$browserProcesses = Get-Process -Name msedge,chrome,firefox -ErrorAction SilentlyContinue
-		$warn = 'Only cache paths will be targeted; profile/account data is excluded.'
-		if ($browserProcesses) {
-			$warn = 'Browser processes are running; signed-in session data may be active. Cached web content only will be targeted.'
-		}
-		if (-not (Confirm-Step -Title 'Clear thumbnail and browser cache files (not profiles, not credentials)' -Warning $warn)) {
-			Add-ActionResult -Action 'Thumbnail and browser cache cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		$paths = @(
-			"$env:LOCALAPPDATA\Microsoft\Windows\Explorer",
-			"$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
-			"$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache",
-			"$env:LOCALAPPDATA\Mozilla\Firefox\Profiles"
-		)
-
-		$targets = New-Object System.Collections.Generic.List[string]
-		foreach ($path in $paths) {
-			if (-not (Test-Path -LiteralPath $path)) { continue }
-			if ($path -like '*Firefox\Profiles') {
-				Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-					$firefoxCache = Join-Path $_.FullName 'cache2'
-					if (Test-Path -LiteralPath $firefoxCache) {
-						Get-ChildItem -LiteralPath $firefoxCache -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-							$targets.Add($_.FullName)
-						}
-					}
-				}
-				continue
-			}
-			if ($path -like '*Windows\Explorer') {
-				Get-ChildItem -LiteralPath $path -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'thumbcache*' } | ForEach-Object {
-					$targets.Add($_.FullName)
-				}
-				continue
-			}
-			Get-ChildItem -LiteralPath $path -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-				$targets.Add($_.FullName)
-			}
-		}
-
-		Remove-TargetsWithManifest -ActionName 'Thumbnail_Browser_Cache_Cleanup' -Targets $targets -Category 'Cache'
-	}
-	catch {
-		Write-Log -Message "Cache cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Cache'
-		Add-ActionResult -Action 'Thumbnail and browser cache cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-RecycleBinCleanup {
-	try {
-		if (-not (Confirm-Step -Title 'Empty Recycle Bin' -Warning 'Items in Recycle Bin will be removed.')) {
-			Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would empty Recycle Bin.' -Category 'RecycleBin'
-			Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-		Clear-RecycleBin -Force -ErrorAction Stop
-		Write-Log -Message 'Recycle Bin emptied.' -Level 'SUCCESS' -Category 'RecycleBin'
-		Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Recycle Bin cleanup failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'RecycleBin'
-		Add-ActionResult -Action 'Recycle Bin cleanup' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-PrefetchCleanup {
-	if (-not $RemovePrefetch) {
-		Add-ActionResult -Action 'Prefetch cleanup' -Status 'Skipped' -Reason 'FlagNotSet'
+	if ($script:DefenderExclusionsAdded -contains $Path) {
+		Write-LogUtc -Message ("Defender exclusion already tracked: {0}" -f $Path)
 		return
 	}
 
-	if (-not (Confirm-Step -Title 'Remove Prefetch files' -Warning 'Prefetch cleanup can cause short-term slowdown after reboot.')) {
-		Add-ActionResult -Action 'Prefetch cleanup' -Status 'Skipped' -Reason 'UserDeclined'
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would add Defender exclusion: {0}" -f $Path) -Level 'WARN'
 		return
 	}
 
-	$path = Join-Path $env:SystemRoot 'Prefetch'
-	$targets = New-Object System.Collections.Generic.List[string]
-	if (Test-Path -LiteralPath $path) {
-		Get-ChildItem -LiteralPath $path -File -ErrorAction SilentlyContinue | ForEach-Object { $targets.Add($_.FullName) }
-	}
-	Remove-TargetsWithManifest -ActionName 'Prefetch Cleanup' -Targets $targets -Category 'Prefetch'
-}
-
-function Invoke-SearchIndexRebuild {
-	if (-not $RebuildSearchIndex) {
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Request Windows Search index rebuild' -Warning 'Index rebuild may increase CPU and disk usage temporarily.')) {
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would request Windows Search index rebuild via COM interface.' -Category 'Search'
-			Add-ActionResult -Action 'Search index rebuild' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
-
-		$catalogManager = New-Object -ComObject 'Search.Manager'
-		$catalog = $catalogManager.GetCatalog('SystemIndex')
-		$catalog.Reindex()
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Performed'
-		Write-Log -Message 'Search index rebuild requested.' -Category 'Search'
-	}
-	catch {
-		Write-Log -Message "Search index rebuild request failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Search'
-		Add-ActionResult -Action 'Search index rebuild' -Status 'Failed' -Reason $_.Exception.Message
+	if ($PSCmdlet.ShouldProcess($Path, 'Add Windows Defender exclusion path')) {
+		Add-MpPreference -ExclusionPath $Path
+		$script:DefenderExclusionsAdded += $Path
+		Write-LogUtc -Message ("Added Defender exclusion: {0}" -f $Path) -Level 'WARN'
 	}
 }
 
 function Export-RegistryBackup {
-	param(
-		[Parameter(Mandatory)][string]$RegistryPath,
-		[Parameter(Mandatory)][string]$Name
-	)
+<#
+.SYNOPSIS
+Exports a registry key to a .reg backup file.
 
-	$regPath = $RegistryPath -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' -replace '^HKCU:', 'HKEY_CURRENT_USER'
-	$dest = Join-Path $script:BackupRoot "$Name.reg"
+.DESCRIPTION
+Uses reg.exe export to save a registry hive/key snapshot for rollback.
+
+.PARAMETER RegistryPath
+Registry path in reg.exe syntax.
+
+.PARAMETER DestinationFile
+Destination .reg file path.
+
+.EXAMPLE
+Export-RegistryBackup -RegistryPath 'HKLM\SOFTWARE\...' -DestinationFile 'C:\Backups\key.reg'
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$RegistryPath,
+
+		[Parameter(Mandatory = $true)]
+		[string]$DestinationFile
+	)
 
 	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would export registry path $RegistryPath to $dest" -Category 'Registry'
-		return $dest
+		Write-LogUtc -Message ("[DryRun] Would export registry key: {0} -> {1}" -f $RegistryPath, $DestinationFile) -Level 'WARN'
+		return $false
 	}
 
-	$result = Invoke-ExternalCommand -FilePath 'reg.exe' -ArgumentList @('export', $regPath, $dest, '/y') -Name "reg_export_$Name"
-	if ($result.ExitCode -eq 0) {
-		$script:Result.BackupArtifacts.Add($dest)
-	}
-	return $dest
-}
-
-function Invoke-TelemetryRecommendations {
-	if (-not $RecommendTelemetryChanges) {
-		$script:Result.Recommendations.Add('Telemetry tuning not requested. Consider reviewing diagnostic data level and startup telemetry apps manually.')
-		Add-ActionResult -Action 'Telemetry recommendations' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	Write-Log -Message 'Preparing conservative telemetry recommendations.' -Category 'Telemetry'
-	$script:Result.Recommendations.Add('Suggested: Set diagnostic data to Required only (Basic).')
-	$script:Result.Recommendations.Add('Suggested: Review startup telemetry apps and scheduled tasks before disabling.')
-
-	if (-not (Confirm-Step -Title 'Apply conservative diagnostic data setting changes' -Warning 'Changes are reversible; registry backup will be exported first.')) {
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		$backup = Export-RegistryBackup -RegistryPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'DataCollection_backup'
-		if (-not $DryRun) {
-			New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
-			Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 1
+	if ($PSCmdlet.ShouldProcess($RegistryPath, 'Export registry key backup')) {
+		$null = & reg.exe export $RegistryPath $DestinationFile /y 2>&1
+		if ($LASTEXITCODE -ne 0) {
+			throw ("Failed to export registry key: {0}" -f $RegistryPath)
 		}
-		Write-Log -Message "Telemetry policy updated (AllowTelemetry=1). Backup: $backup" -Category 'Telemetry'
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Telemetry settings update failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Telemetry'
-		Add-ActionResult -Action 'Telemetry settings change' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-ServiceStartupRecommendations {
-	$services = Get-Service | Sort-Object Status, DisplayName
-	$startupCommands = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue
-	$weights = @{ Gaming = 3; Office = 2; Development = 1 }
-	$profileWeight = $weights[$OptimizationProfile]
-
-	$candidates = foreach ($svc in $services) {
-		if ($script:EssentialServices -contains $svc.Name) { continue }
-		if ($svc.Status -ne 'Running') { continue }
-		$score = 1
-		if ($svc.Name -match 'OEM|Updater|Update|Telemetry|Diag|Assistant') { $score += 2 }
-		if ($OptimizationProfile -eq 'Gaming' -and $svc.Name -match 'Xbox|Game') { $score += 2 }
-		if ($OptimizationProfile -eq 'Development' -and $svc.Name -match 'Docker|Hyper|WSL') { $score -= 2 }
-		if ($score -lt $profileWeight) { continue }
-		$priority = 'Medium'
-		if ($score -ge 3) {
-			$priority = 'High'
-		}
-		[PSCustomObject]@{
-			Type = 'Service'
-			Name = $svc.Name
-			DisplayName = $svc.DisplayName
-			Status = [string]$svc.Status
-			RecommendedAction = 'SetStartupTypeManual'
-			Priority = $priority
-			Description = (Get-CimInstance Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue).Description
-		}
+		Write-LogUtc -Message ("Exported registry key: {0} -> {1}" -f $RegistryPath, $DestinationFile)
+		return $true
 	}
 
-	$startup = foreach ($cmd in $startupCommands) {
-		if ($cmd.Name -match 'Security|Defender|OneDrive|Windows') { continue }
-		[PSCustomObject]@{
-			Type = 'StartupApp'
-			Name = $cmd.Name
-			DisplayName = $cmd.Caption
-			Status = 'Enabled'
-			RecommendedAction = 'DisableStartupEntry'
-			Priority = 'Medium'
-			Description = $cmd.Command
-			Location = $cmd.Location
-		}
-	}
-
-	$recommendations = @($candidates + $startup | Sort-Object Priority)
-	$path = Join-Path $script:RunRoot 'service_startup_recommendations.json'
-	$recommendations | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
-	Write-Log -Message "Service/startup recommendations exported: $path" -Category 'Optimization'
-	return $recommendations
-}
-
-function Disable-StartupCommandEntry {
-	param(
-		[Parameter(Mandatory)][string]$EntryName,
-		[string]$Location
-	)
-
-	$targets = @(
-		'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
-		'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
-		'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
-	)
-
-	foreach ($target in $targets) {
-		if (-not (Test-Path -LiteralPath $target)) { continue }
-		$props = Get-ItemProperty -Path $target -ErrorAction SilentlyContinue
-		if ($null -ne $props.PSObject.Properties[$EntryName]) {
-			Remove-ItemProperty -Path $target -Name $EntryName -ErrorAction Stop
-			return $true
-		}
-	}
-
-	Write-Log -Message "Startup entry '$EntryName' could not be disabled automatically. Location: $Location" -Level 'WARN' -Category 'Optimization'
 	return $false
 }
 
-function Invoke-ServiceStartupOptimization {
-	Write-Log -Message "Analyzing services/startup candidates for profile '$OptimizationProfile'." -Category 'Optimization'
-	try {
-		$recs = Get-ServiceStartupRecommendations
-		if (-not $recs -or $recs.Count -eq 0) {
-			Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Skipped' -Reason 'NoCandidates'
-			return
-		}
+function Export-DataSnapshot {
+<#
+.SYNOPSIS
+Exports snapshot data to JSON and/or CSV.
 
-		$previewPath = Join-Path $script:RunRoot 'service_startup_candidates.csv'
-		$recs | Export-Csv -Path $previewPath -NoTypeInformation -Encoding UTF8
+.DESCRIPTION
+Writes snapshot objects for rollback and reporting. Creates JSON and CSV when requested.
 
-		foreach ($rec in $recs) {
-			$title = "Apply recommendation: [$($rec.Type)] $($rec.Name) -> $($rec.RecommendedAction)"
-			if (-not (Confirm-Step -Title $title -Warning 'Essential networking/auth/search/update/security services are protected.')) {
-				continue
-			}
+.PARAMETER Data
+Input object collection.
 
-			if ($DryRun) {
-				Write-Log -Message "[DryRun] Would apply recommendation to $($rec.Name)." -Category 'Optimization'
-				continue
-			}
+.PARAMETER BaseFilePath
+Base path without extension.
 
-			if ($rec.Type -eq 'Service' -and $script:EssentialServices -notcontains $rec.Name) {
-				Set-Service -Name $rec.Name -StartupType Manual -ErrorAction Stop
-				$change = [PSCustomObject]@{ Name = $rec.Name; Action = 'StartupType=Manual'; Timestamp = Get-Date }
-				$script:Result.ServicesChanged.Add($change)
-			}
-			elseif ($rec.Type -eq 'StartupApp') {
-				if (Disable-StartupCommandEntry -EntryName $rec.Name -Location $rec.Location) {
-					$change = [PSCustomObject]@{ Name = $rec.Name; Action = 'StartupEntryDisabled'; Timestamp = Get-Date }
-					$script:Result.ServicesChanged.Add($change)
-				}
-			}
-		}
+.PARAMETER AsCsv
+Also export CSV.
 
-		Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Service/startup optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Optimization'
-		Add-ActionResult -Action 'Service/startup optimization analysis' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
+.EXAMPLE
+Export-DataSnapshot -Data $services -BaseFilePath 'C:\Backups\Services_20260313T...'
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[object]$Data,
 
-function Get-DriverInventory {
-	$resultPath = Join-Path $script:RunRoot 'drivers_inventory_raw.txt'
-	if ($DryRun) {
-		Write-Log -Message '[DryRun] Would enumerate drivers using pnputil /enum-drivers.' -Category 'Drivers'
-		return @()
-	}
+		[Parameter(Mandatory = $true)]
+		[string]$BaseFilePath,
 
-	$raw = & pnputil.exe /enum-drivers 2>&1
-	$raw | Set-Content -Path $resultPath -Encoding UTF8
-
-	$drivers = New-Object System.Collections.Generic.List[object]
-	$current = [ordered]@{}
-	foreach ($line in $raw) {
-		if ($line -match '^Published Name\s*:\s*(.+)$') {
-			if ($current.Count -gt 0) {
-				$drivers.Add([PSCustomObject]$current)
-				$current = [ordered]@{}
-			}
-			$current.PublishedName = $Matches[1].Trim()
-		}
-		elseif ($line -match '^Original Name\s*:\s*(.+)$') { $current.OriginalName = $Matches[1].Trim() }
-		elseif ($line -match '^Provider Name\s*:\s*(.+)$') { $current.ProviderName = $Matches[1].Trim() }
-		elseif ($line -match '^Class Name\s*:\s*(.+)$') { $current.ClassName = $Matches[1].Trim() }
-		elseif ($line -match '^Driver Version\s*:\s*(.+)$') { $current.DriverVersion = $Matches[1].Trim() }
-		elseif ($line -match '^Signer Name\s*:\s*(.+)$') { $current.SignerName = $Matches[1].Trim() }
-	}
-	if ($current.Count -gt 0) { $drivers.Add([PSCustomObject]$current) }
-	return $drivers
-}
-
-function Invoke-DriverManagement {
-	Write-Log -Message 'Starting driver inventory and duplicate analysis.' -Category 'Drivers'
-	try {
-		$drivers = Get-DriverInventory
-		$csv = Join-Path $script:RunRoot 'drivers_inventory.csv'
-		$json = Join-Path $script:RunRoot 'drivers_inventory.json'
-		$drivers | Export-Csv -Path $csv -NoTypeInformation -Encoding UTF8
-		$drivers | ConvertTo-Json -Depth 6 | Set-Content -Path $json -Encoding UTF8
-		Write-Log -Message "Driver inventory exported: $csv ; $json" -Category 'Drivers'
-
-		$dupes = $drivers | Where-Object { $_.OriginalName } | Group-Object OriginalName | Where-Object { $_.Count -gt 1 }
-		if ($dupes) {
-			$dupPath = Join-Path $script:RunRoot 'duplicate_drivers.csv'
-			$dupes | ForEach-Object {
-				$_.Group | Select-Object OriginalName, PublishedName, ProviderName, DriverVersion, ClassName
-			} | Export-Csv -Path $dupPath -NoTypeInformation -Encoding UTF8
-			Write-Log -Message "Duplicate drivers listed: $dupPath" -Level 'WARN' -Category 'Drivers'
-
-			if (Confirm-Step -Title 'Review duplicate drivers for optional removal now' -Warning 'No driver will be removed automatically without explicit confirmation.') {
-				foreach ($dup in $dupes) {
-					foreach ($entry in $dup.Group) {
-						$title = "Remove duplicate driver $($entry.PublishedName) ($($entry.OriginalName))"
-						if (-not (Confirm-Step -Title $title -Warning 'Driver removal can affect hardware functionality. Backup will be created first.')) { continue }
-
-						$backupDir = Join-Path $script:BackupRoot "Drivers_$script:Stamp"
-						if (-not $DryRun) {
-							New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
-							try {
-								if (Get-Command Export-WindowsDriver -ErrorAction SilentlyContinue) {
-									Export-WindowsDriver -Online -Destination $backupDir | Out-Null
-								}
-								else {
-									# Fallback when Export-WindowsDriver cmdlet is unavailable.
-									& pnputil.exe /export-driver * $backupDir | Out-Null
-								}
-							}
-							catch {
-								Write-Log -Message "Driver backup failed before removal: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-								continue
-							}
-							$script:Result.DriversBackedUp.Add($backupDir)
-
-							$removeResult = Invoke-ExternalCommand -FilePath 'pnputil.exe' -ArgumentList @('/delete-driver', $entry.PublishedName, '/uninstall') -Name "driver_remove_$($entry.PublishedName)"
-							if ($removeResult.ExitCode -eq 0) {
-								$script:Result.DriversRemoved.Add($entry.PublishedName)
-							}
-						}
-						else {
-							Write-Log -Message "[DryRun] Would backup drivers and remove duplicate $($entry.PublishedName)." -Category 'Drivers'
-						}
-					}
-				}
-			}
-		}
-
-		Add-ActionResult -Action 'Driver inventory and duplicate analysis' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Driver analysis failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver inventory and duplicate analysis' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-DriverUpdateRecommendations {
-	$report = Join-Path $script:RunRoot 'driver_update_recommendations.json'
-	try {
-		if (Get-Command -Name Get-WindowsUpdate -ErrorAction SilentlyContinue) {
-			if ($DryRun) {
-				$updates = @([PSCustomObject]@{ Source='PSWindowsUpdate'; Title='Driver update scan would run in non-DryRun mode.' })
-			}
-			else {
-				$updates = Get-WindowsUpdate -MicrosoftUpdate -Category Drivers -IgnoreReboot -ErrorAction Stop |
-					Select-Object Title, KB, Size, LastDeploymentChangeTime
-			}
-			$updates | ConvertTo-Json -Depth 5 | Set-Content -Path $report -Encoding UTF8
-			return $updates
-		}
-
-		# Limitation: native COM API gives less-rich metadata than PSWindowsUpdate, but avoids non-default dependency.
-		$session = New-Object -ComObject 'Microsoft.Update.Session'
-		$searcher = $session.CreateUpdateSearcher()
-		$criteria = "IsInstalled=0 and Type='Driver'"
-		$searchResult = $searcher.Search($criteria)
-		$updates = for ($i=0; $i -lt $searchResult.Updates.Count; $i++) {
-			$u = $searchResult.Updates.Item($i)
-			[PSCustomObject]@{
-				Source = 'WindowsUpdateCOM'
-				Title = $u.Title
-				IsDownloaded = $u.IsDownloaded
-				RebootRequired = $u.RebootRequired
-			}
-		}
-		$updates | ConvertTo-Json -Depth 5 | Set-Content -Path $report -Encoding UTF8
-		return $updates
-	}
-	catch {
-		Write-Log -Message "Driver update recommendation query failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Drivers'
-		return @()
-	}
-}
-
-function Invoke-DriverAutoUpdate {
-	$updates = Get-DriverUpdateRecommendations
-	if (-not $updates -or $updates.Count -eq 0) {
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'NoUpdates'
-		return
-	}
-
-	if (-not $AutoUpdateDrivers) {
-		Write-Log -Message 'Driver updates available; AutoUpdateDrivers not set. See recommendation report.' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'FlagNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Install driver updates from Windows Update channel only' -Warning 'No third-party vendor installers will be invoked. Drivers will be backed up first.')) {
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	$backupDir = Join-Path $script:BackupRoot "Drivers_PreUpdate_$script:Stamp"
-	if ($DryRun) {
-		Write-Log -Message "[DryRun] Would backup drivers to $backupDir and install Windows Update driver updates." -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Skipped' -Reason 'DryRun'
-		return
-	}
-
-	try {
-		New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
-		if (Get-Command Export-WindowsDriver -ErrorAction SilentlyContinue) {
-			Export-WindowsDriver -Online -Destination $backupDir | Out-Null
-		}
-		else {
-			& pnputil.exe /export-driver * $backupDir | Out-Null
-		}
-		$script:Result.DriversBackedUp.Add($backupDir)
-
-		if (Get-Command -Name Install-WindowsUpdate -ErrorAction SilentlyContinue) {
-			Install-WindowsUpdate -MicrosoftUpdate -Category Drivers -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
-		}
-		else {
-			# Limitation fallback: COM installation path may install only updates surfaced in current scan and can provide limited progress details.
-			$session = New-Object -ComObject 'Microsoft.Update.Session'
-			$searcher = $session.CreateUpdateSearcher()
-			$sr = $searcher.Search("IsInstalled=0 and Type='Driver'")
-			if ($sr.Updates.Count -gt 0) {
-				$coll = New-Object -ComObject 'Microsoft.Update.UpdateColl'
-				for ($i=0; $i -lt $sr.Updates.Count; $i++) { [void]$coll.Add($sr.Updates.Item($i)) }
-				$downloader = $session.CreateUpdateDownloader()
-				$downloader.Updates = $coll
-				[void]$downloader.Download()
-				$installer = $session.CreateUpdateInstaller()
-				$installer.Updates = $coll
-				[void]$installer.Install()
-			}
-		}
-
-		Add-ActionResult -Action 'Driver update installation' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Driver update installation failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Drivers'
-		Add-ActionResult -Action 'Driver update installation' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Get-BloatwareCandidates {
-	$safeNames = @(
-		'Microsoft.BingNews',
-		'Microsoft.BingWeather',
-		'Microsoft.GetHelp',
-		'Microsoft.Getstarted',
-		'Microsoft.MicrosoftOfficeHub',
-		'Microsoft.MicrosoftSolitaireCollection',
-		'Microsoft.People',
-		'Microsoft.SkypeApp',
-		'Microsoft.Xbox.TCUI',
-		'Microsoft.XboxGamingOverlay',
-		'Microsoft.XboxGameOverlay',
-		'Microsoft.XboxIdentityProvider',
-		'Microsoft.XboxSpeechToTextOverlay',
-		'Microsoft.ZuneMusic',
-		'Microsoft.ZuneVideo'
+		[switch]$AsCsv
 	)
 
-	$all = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-	$all | Where-Object { $safeNames -contains $_.Name } | Select-Object Name, PackageFullName, Publisher, InstallLocation
+	$jsonPath = '{0}.json' -f $BaseFilePath
+	$csvPath = '{0}.csv' -f $BaseFilePath
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would export snapshot JSON: {0}" -f $jsonPath) -Level 'WARN'
+		if ($AsCsv) {
+			Write-LogUtc -Message ("[DryRun] Would export snapshot CSV: {0}" -f $csvPath) -Level 'WARN'
+		}
+		return [pscustomobject]@{ JsonPath = $jsonPath; CsvPath = ($(if ($AsCsv) { $csvPath } else { $null })) }
+	}
+
+	if ($PSCmdlet.ShouldProcess($jsonPath, 'Write JSON snapshot')) {
+		$Data | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
+		Write-LogUtc -Message ("Snapshot JSON written: {0}" -f $jsonPath)
+	}
+
+	if ($AsCsv -and $PSCmdlet.ShouldProcess($csvPath, 'Write CSV snapshot')) {
+		$Data | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+		Write-LogUtc -Message ("Snapshot CSV written: {0}" -f $csvPath)
+	}
+
+	return [pscustomobject]@{ JsonPath = $jsonPath; CsvPath = ($(if ($AsCsv) { $csvPath } else { $null })) }
 }
 
-function Invoke-BloatwareWorkflow {
-	try {
-		$inventoryPath = Join-Path $script:BackupRoot 'appx_inventory_before.json'
-		$all = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Select-Object Name, PackageFullName, NonRemovable, SignatureKind
-		$all | ConvertTo-Json -Depth 5 | Set-Content -Path $inventoryPath -Encoding UTF8
-		$script:Result.BackupArtifacts.Add($inventoryPath)
+function New-BackupManifest {
+<#
+.SYNOPSIS
+Creates an in-memory backup manifest object.
 
-		$candidates = Get-BloatwareCandidates
-		$preview = Join-Path $script:RunRoot 'bloatware_candidates.csv'
-		$candidates | Export-Csv -Path $preview -NoTypeInformation -Encoding UTF8
+.DESCRIPTION
+Initializes manifest metadata and artifact collection. Final persistence is handled by Save-BackupManifest.
 
-		if ($PreviewBloatRemoval -or -not $RemoveBloat) {
-			Write-Log -Message "Bloatware preview exported: $preview" -Category 'Bloatware'
-			$skipReason = 'FlagNotSet'
-			if ($RemoveBloat) {
-				$skipReason = 'PreviewOnly'
-			}
-			Add-ActionResult -Action 'Bloatware removal' -Status 'Skipped' -Reason $skipReason
-			return
-		}
+.EXAMPLE
+$manifest = New-BackupManifest
+#>
+	[CmdletBinding()]
+	param()
 
-		if (-not (Confirm-Step -Title 'Remove bloatware candidates from safe list' -Warning 'Core OS/account-critical apps are excluded.')) {
-			Add-ActionResult -Action 'Bloatware removal' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
-
-		$removed = New-Object System.Collections.Generic.List[object]
-		foreach ($pkg in $candidates) {
-			if ($DryRun) {
-				Write-Log -Message "[DryRun] Would remove Appx package: $($pkg.PackageFullName)" -Category 'Bloatware'
-				continue
-			}
-
-			try {
-				Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
-				$removed.Add($pkg)
-			}
-			catch {
-				Write-Log -Message "Failed removing package $($pkg.Name): $($_.Exception.Message)" -Level 'WARN' -Category 'Bloatware'
-			}
-		}
-
-		$removedPath = Join-Path $script:RunRoot 'removed_bloatware.csv'
-		$removed | Export-Csv -Path $removedPath -NoTypeInformation -Encoding UTF8
-		Add-ActionResult -Action 'Bloatware removal' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Bloatware workflow failed: $($_.Exception.Message)" -Level 'ERROR' -Category 'Bloatware'
-		Add-ActionResult -Action 'Bloatware removal' -Status 'Failed' -Reason $_.Exception.Message
+	return [pscustomobject]@{
+		RunId        = $script:RunId
+		CreatedUtc   = (Get-Date).ToUniversalTime().ToString('o')
+		Hostname     = $env:COMPUTERNAME
+		LogPath      = $script:ResolvedLogPath
+		BackupPath   = $script:ResolvedBackupPath
+		Artifacts    = @()
 	}
 }
 
-function Invoke-PowerPlanOptimization {
+function Add-BackupManifestArtifact {
+<#
+.SYNOPSIS
+Adds an artifact entry to backup manifest.
+
+.DESCRIPTION
+Records backup output metadata including source, destination, timestamp, and existence check.
+
+.PARAMETER Manifest
+Manifest object.
+
+.PARAMETER Type
+Artifact type label.
+
+.PARAMETER Source
+Source identifier.
+
+.PARAMETER Destination
+Output path.
+
+.EXAMPLE
+$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Registry' -Source 'HKLM\...' -Destination $path
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$Manifest,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Type,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Source,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Destination
+	)
+
+	$item = [pscustomobject]@{
+		Type         = $Type
+		Source       = $Source
+		Destination  = $Destination
+		TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
+		Exists       = (Test-Path -Path $Destination)
+	}
+
+	$Manifest.Artifacts += $item
+	return $Manifest
+}
+
+function Save-BackupManifest {
+<#
+.SYNOPSIS
+Persists backup manifest to JSON file.
+
+.DESCRIPTION
+Writes manifest to BackupPath with RunId in filename.
+
+.PARAMETER Manifest
+Manifest object to write.
+
+.EXAMPLE
+$manifestPath = Save-BackupManifest -Manifest $manifest
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$Manifest
+	)
+
+	$manifestPath = Join-Path -Path $script:ResolvedBackupPath -ChildPath ("BackupManifest_{0}.json" -f $script:RunId)
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would write backup manifest: {0}" -f $manifestPath) -Level 'WARN'
+		return $manifestPath
+	}
+
+	if ($PSCmdlet.ShouldProcess($manifestPath, 'Write backup manifest')) {
+		$Manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding UTF8
+		Write-LogUtc -Message ("Backup manifest written: {0}" -f $manifestPath)
+	}
+
+	return $manifestPath
+}
+
+#endregion Module 2 Helpers
+
+#region Module 2
+
+function Invoke-Module2PrechecksAndBackups {
+<#
+.SYNOPSIS
+Runs Module 2 pre-checks and backup foundation.
+
+.DESCRIPTION
+Creates restore point (unless explicitly skipped), adds Defender exclusions for log/backup paths,
+exports required registry keys, captures system snapshots, exports drivers, and writes a manifest.
+
+.PARAMETER HardwareProfile
+Hardware profile from Module 1.
+
+.PARAMETER SkipRestorePoint
+Skips restore point creation when explicitly requested.
+
+.EXAMPLE
+$module2 = Invoke-Module2PrechecksAndBackups -HardwareProfile $script:HardwareProfile -SkipRestorePoint:$SkipRestorePoint
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile,
+
+		[switch]$SkipRestorePoint
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module2-PrechecksAndBackups'
+	$manifest = New-BackupManifest
+
 	try {
-		if (-not (Confirm-Step -Title 'Apply conservative power plan policy (AC=High Performance, Battery=Balanced)' -Warning 'Balanced behavior on battery is preserved by default.')) {
-			Add-ActionResult -Action 'Power plan optimization' -Status 'Skipped' -Reason 'UserDeclined'
-			return
+		$backupRoot = Join-Path -Path $script:ResolvedBackupPath -ChildPath ("Run_{0}" -f $script:RunId)
+		$registryRoot = Join-Path -Path $backupRoot -ChildPath 'Registry'
+		$snapshotRoot = Join-Path -Path $backupRoot -ChildPath 'Snapshots'
+		$driverExportRoot = Join-Path -Path $backupRoot -ChildPath 'DriversExport'
+
+		foreach ($folder in @($backupRoot, $registryRoot, $snapshotRoot, $driverExportRoot)) {
+			if (-not (Test-Path -Path $folder)) {
+				if (-not $DryRun) {
+					New-Item -Path $folder -ItemType Directory -Force | Out-Null
+				}
+				Write-LogUtc -Message ($(if ($DryRun) { "[DryRun] Would create folder: $folder" } else { "Created folder: $folder" }))
+			}
 		}
 
-		if ($DryRun) {
-			Write-Log -Message '[DryRun] Would switch active plan based on current power source.' -Category 'Performance'
-			Add-ActionResult -Action 'Power plan optimization' -Status 'Skipped' -Reason 'DryRun'
-			return
+		if ($SkipRestorePoint) {
+			$msg = 'Restore point creation skipped by -SkipRestorePoint.'
+			$result.Warnings += $msg
+			Write-LogUtc -Message $msg -Level 'WARN'
 		}
-
-		$battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
-		$highPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
-		$balancedGuid = '381b4222-f694-41f0-9685-ff5bb260df2e'
-		if ($battery) {
-			powercfg /setactive $balancedGuid | Out-Null
-			Write-Log -Message 'Battery-capable system detected. Balanced plan set.' -Category 'Performance'
+		elseif ($DryRun) {
+			Write-LogUtc -Message '[DryRun] Would create system restore point at script start.' -Level 'WARN'
 		}
 		else {
-			powercfg /setactive $highPerfGuid | Out-Null
-			Write-Log -Message 'AC-only system detected. High Performance plan set.' -Category 'Performance'
+			if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Create system restore point')) {
+				Checkpoint-Computer -Description ("Optimize-Windows10_{0}" -f $script:RunId) -RestorePointType 'MODIFY_SETTINGS'
+				Write-LogUtc -Message 'System restore point created successfully.'
+				$result.ChangesApplied += 'System restore point created.'
+			}
 		}
-		Add-ActionResult -Action 'Power plan optimization' -Status 'Performed'
+
+		Add-DefenderPathExclusion -Path $script:ResolvedLogPath
+		Add-DefenderPathExclusion -Path $script:ResolvedBackupPath
+		$result.ChangesApplied += 'Defender exclusions evaluated for log and backup paths.'
+
+		$registryTargets = @(
+			'HKLM\SYSTEM\CurrentControlSet\Services',
+			'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion',
+			'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
+		)
+
+		foreach ($target in $registryTargets) {
+			$safeName = (($target -replace '[\\/:*?"<>| ]', '_').Trim('_'))
+			$destination = Join-Path -Path $registryRoot -ChildPath ("{0}_{1}.reg" -f $safeName, $script:RunId)
+			$exported = Export-RegistryBackup -RegistryPath $target -DestinationFile $destination
+			if ($exported -or $DryRun) {
+				$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Registry' -Source $target -Destination $destination
+				$result.ChangesApplied += ("Registry backup prepared: {0}" -f $target)
+			}
+		}
+
+		$apps = @()
+		try { $apps += Get-Package -ErrorAction Stop | Select-Object Name, Version, ProviderName, Source } catch { Write-LogUtc -Message ("Get-Package failed: {0}" -f $_.Exception.Message) -Level 'WARN'; $result.Warnings += 'Get-Package snapshot incomplete.' }
+		try { $apps += Get-AppxPackage -ErrorAction Stop | Select-Object Name, Version, Publisher, InstallLocation } catch { Write-LogUtc -Message ("Get-AppxPackage failed: {0}" -f $_.Exception.Message) -Level 'WARN'; $result.Warnings += 'Get-AppxPackage snapshot incomplete.' }
+
+		$appsExport = Export-DataSnapshot -Data $apps -BaseFilePath (Join-Path -Path $snapshotRoot -ChildPath ("InstalledApps_{0}" -f $script:RunId)) -AsCsv
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Installed applications' -Destination $appsExport.JsonPath
+		if ($appsExport.CsvPath) { $manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Installed applications CSV' -Destination $appsExport.CsvPath }
+
+		$tasks = Get-ScheduledTask | Select-Object TaskName, TaskPath, State
+		$tasksExport = Export-DataSnapshot -Data $tasks -BaseFilePath (Join-Path -Path $snapshotRoot -ChildPath ("ScheduledTasks_{0}" -f $script:RunId)) -AsCsv
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Scheduled tasks' -Destination $tasksExport.JsonPath
+		if ($tasksExport.CsvPath) { $manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Scheduled tasks CSV' -Destination $tasksExport.CsvPath }
+
+		$services = Get-Service | Select-Object Name, DisplayName, Status, StartType
+		$servicesExport = Export-DataSnapshot -Data $services -BaseFilePath (Join-Path -Path $snapshotRoot -ChildPath ("Services_{0}" -f $script:RunId)) -AsCsv
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Services' -Destination $servicesExport.JsonPath
+		if ($servicesExport.CsvPath) { $manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Services CSV' -Destination $servicesExport.CsvPath }
+
+		$startup = Get-CimInstance -ClassName Win32_StartupCommand | Select-Object Name, Command, Location, User
+		$startupExport = Export-DataSnapshot -Data $startup -BaseFilePath (Join-Path -Path $snapshotRoot -ChildPath ("StartupCommands_{0}" -f $script:RunId)) -AsCsv
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Startup commands' -Destination $startupExport.JsonPath
+		if ($startupExport.CsvPath) { $manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'Startup commands CSV' -Destination $startupExport.CsvPath }
+
+		$driversEnumPath = Join-Path -Path $snapshotRoot -ChildPath ("PnPUtil_EnumDrivers_{0}.txt" -f $script:RunId)
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would snapshot drivers enumeration to: {0}" -f $driversEnumPath) -Level 'WARN'
+		}
+		else {
+			if ($PSCmdlet.ShouldProcess($driversEnumPath, 'Capture pnputil /enum-drivers snapshot')) {
+				$driverEnumOutput = & pnputil.exe /enum-drivers 2>&1
+				$driverEnumOutput | Set-Content -Path $driversEnumPath -Encoding UTF8
+				Write-LogUtc -Message ("Driver snapshot captured: {0}" -f $driversEnumPath)
+			}
+		}
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'pnputil /enum-drivers' -Destination $driversEnumPath
+
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would export third-party drivers to: {0}" -f $driverExportRoot) -Level 'WARN'
+		}
+		else {
+			if ($PSCmdlet.ShouldProcess($driverExportRoot, 'Export third-party drivers')) {
+				$driverExportOutput = & pnputil.exe /export-driver * $driverExportRoot 2>&1
+				Write-LogUtc -Message ("Third-party driver export completed: {0}" -f $driverExportRoot)
+				$driverExportLogPath = Join-Path -Path $snapshotRoot -ChildPath ("PnPUtil_ExportDrivers_{0}.txt" -f $script:RunId)
+				$driverExportOutput | Set-Content -Path $driverExportLogPath -Encoding UTF8
+				$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Snapshot' -Source 'pnputil /export-driver output' -Destination $driverExportLogPath
+			}
+		}
+
+		$manifest = Add-BackupManifestArtifact -Manifest $manifest -Type 'Backup' -Source 'Third-party drivers export root' -Destination $driverExportRoot
+		$manifestPath = Save-BackupManifest -Manifest $manifest
+		$result.ChangesApplied += 'Backup manifest recorded.'
+		$result | Add-Member -MemberType NoteProperty -Name BackupManifestPath -Value $manifestPath -Force
+		$result | Add-Member -MemberType NoteProperty -Name BackupRootPath -Value $backupRoot -Force
+
+		Write-LogUtc -Message 'Module 2 completed successfully.'
 	}
 	catch {
-		Write-Log -Message "Power plan optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Power plan optimization' -Status 'Failed' -Reason $_.Exception.Message
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 2 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 2
+
+#region Module 3 Helpers
+
+function Request-ExplicitRuntimeConfirmation {
+<#
+.SYNOPSIS
+Prompts for explicit runtime confirmation that cannot be auto-skipped.
+
+.DESCRIPTION
+Requires operator to type YES for high-sensitivity operations. This confirmation is not bypassed
+by AutoApprove to satisfy mandatory safety policy.
+
+.PARAMETER PromptMessage
+Message shown to operator.
+
+.EXAMPLE
+$ok = Request-ExplicitRuntimeConfirmation -PromptMessage 'Proceed with action?'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$PromptMessage
+	)
+
+	$response = Read-Host ("{0} Type YES to continue" -f $PromptMessage)
+	return ($response -ceq 'YES')
+}
+
+function Get-PermanentExclusionPatterns {
+<#
+.SYNOPSIS
+Returns permanent exclusion path patterns.
+
+.DESCRIPTION
+These patterns represent paths/data that must never be modified by cleanup routines.
+
+.EXAMPLE
+$patterns = Get-PermanentExclusionPatterns
+#>
+	[CmdletBinding()]
+	param()
+
+	return @(
+		'C:\Users\*\AppData\Roaming\Microsoft\Credentials*',
+		'C:\Users\*\AppData\Local\Microsoft\Credentials*',
+		'C:\Users\*\AppData\Local\Microsoft\Vault*',
+		'C:\Users\*\AppData\Roaming\Microsoft\Protect*',
+		'C:\Users\*\AppData\Local\Google\Chrome\User Data*',
+		'C:\Users\*\AppData\Local\Microsoft\Edge\User Data*',
+		'C:\Users\*\AppData\Roaming\Mozilla\Firefox\Profiles*',
+		'C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc*',
+		'C:\ProgramData\Microsoft\Search\Data*'
+	)
+}
+
+function Test-IsPathPermanentlyExcluded {
+<#
+.SYNOPSIS
+Determines whether path matches permanent exclusion rules.
+
+.DESCRIPTION
+Returns $true if the path falls under non-negotiable exclusion patterns.
+
+.PARAMETER Path
+Path to evaluate.
+
+.EXAMPLE
+if (Test-IsPathPermanentlyExcluded -Path $target) { ... }
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Path
+	)
+
+	$full = [System.IO.Path]::GetFullPath($Path)
+	foreach ($pattern in (Get-PermanentExclusionPatterns)) {
+		if ($full -like $pattern) {
+			return $true
+		}
+	}
+	return $false
+}
+
+function Backup-TargetPath {
+<#
+.SYNOPSIS
+Creates backup copy before destructive action.
+
+.DESCRIPTION
+Copies target content to backup staging area and returns backup location.
+No deletion should proceed if backup fails unless explicit Force exception path is documented.
+
+.PARAMETER TargetPath
+Path to back up.
+
+.PARAMETER BackupRoot
+Root backup folder.
+
+.PARAMETER Label
+Label used in backup folder naming.
+
+.EXAMPLE
+$backup = Backup-TargetPath -TargetPath $Path -BackupRoot $script:BackupRootPath -Label 'WindowsTemp'
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$TargetPath,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRoot,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Label
+	)
+
+	if (-not (Test-Path -Path $TargetPath)) {
+		Write-LogUtc -Message ("Backup skipped (path missing): {0}" -f $TargetPath)
+		return $null
+	}
+
+	$safeLabel = ($Label -replace '[^A-Za-z0-9_\-]', '_')
+	$dest = Join-Path -Path $BackupRoot -ChildPath ("PreDelete_{0}_{1}" -f $safeLabel, (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would back up target path: {0} -> {1}" -f $TargetPath, $dest) -Level 'WARN'
+		return $dest
+	}
+
+	if ($PSCmdlet.ShouldProcess($TargetPath, ("Backup path to {0}" -f $dest))) {
+		New-Item -Path $dest -ItemType Directory -Force | Out-Null
+		Copy-Item -Path $TargetPath -Destination $dest -Recurse -Force -ErrorAction Stop
+		Write-LogUtc -Message ("Backup created: {0} -> {1}" -f $TargetPath, $dest)
+	}
+
+	return $dest
+}
+
+function Clear-DirectoryFilesSafe {
+<#
+.SYNOPSIS
+Clears directory contents with exclusion and lock handling.
+
+.DESCRIPTION
+Backs up target first, then removes items while skipping locked files and logging each skip.
+
+.PARAMETER TargetPath
+Directory whose contents should be cleared.
+
+.PARAMETER BackupRoot
+Backup root path.
+
+.PARAMETER Label
+Operation label for backup naming.
+
+.PARAMETER RequireExplicitConfirmation
+When set, requires explicit runtime YES confirmation.
+
+.EXAMPLE
+Clear-DirectoryFilesSafe -TargetPath 'C:\Windows\Temp' -BackupRoot $script:BackupRootPath -Label 'WindowsTemp'
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$TargetPath,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRoot,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Label,
+
+		[switch]$RequireExplicitConfirmation
+	)
+
+	if (-not (Test-Path -Path $TargetPath -PathType Container)) {
+		Write-LogUtc -Message ("Cleanup skipped (directory missing): {0}" -f $TargetPath)
+		return [pscustomobject]@{ Removed = 0; Skipped = 0; BackupPath = $null; Confirmed = $true }
+	}
+
+	if (Test-IsPathPermanentlyExcluded -Path $TargetPath) {
+		Write-LogUtc -Message ("Cleanup blocked by permanent exclusion: {0}" -f $TargetPath) -Level 'WARN'
+		return [pscustomobject]@{ Removed = 0; Skipped = 0; BackupPath = $null; Confirmed = $false }
+	}
+
+	if ($RequireExplicitConfirmation) {
+		$confirmed = Request-ExplicitRuntimeConfirmation -PromptMessage ("Sensitive path cleanup requested: {0}." -f $TargetPath)
+		if (-not $confirmed) {
+			Write-LogUtc -Message ("Operator declined explicit cleanup confirmation for: {0}" -f $TargetPath) -Level 'WARN'
+			return [pscustomobject]@{ Removed = 0; Skipped = 0; BackupPath = $null; Confirmed = $false }
+		}
+	}
+
+	$backupPath = Backup-TargetPath -TargetPath $TargetPath -BackupRoot $BackupRoot -Label $Label
+	if (-not $backupPath -and -not $DryRun) {
+		throw ("Backup requirement failed for destructive action: {0}" -f $TargetPath)
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would clear directory contents: {0}" -f $TargetPath) -Level 'WARN'
+		return [pscustomobject]@{ Removed = 0; Skipped = 0; BackupPath = $backupPath; Confirmed = $true }
+	}
+
+	$removed = 0
+	$skipped = 0
+	$items = Get-ChildItem -Path $TargetPath -Force -ErrorAction SilentlyContinue
+	foreach ($item in $items) {
+		try {
+			if ($PSCmdlet.ShouldProcess($item.FullName, 'Remove item')) {
+				Remove-Item -Path $item.FullName -Recurse -Force -ErrorAction Stop
+				$removed++
+			}
+		}
+		catch {
+			$skipped++
+			Write-LogUtc -Message ("Skipped locked/protected item: {0}; Reason: {1}" -f $item.FullName, $_.Exception.Message) -Level 'WARN'
+		}
+	}
+
+	Write-LogUtc -Message ("Cleanup summary for {0}: Removed={1}; Skipped={2}" -f $TargetPath, $removed, $skipped)
+	return [pscustomobject]@{ Removed = $removed; Skipped = $skipped; BackupPath = $backupPath; Confirmed = $true }
+}
+
+function Invoke-SoftwareDistributionCleanup {
+<#
+.SYNOPSIS
+Safely clears SoftwareDistribution\Download with backup and free-space guard.
+
+.DESCRIPTION
+Computes backup feasibility, enforces >80% free-space guard, requires Force for no-backup proceed path,
+stops/starts wuauserv, and logs all outcomes.
+
+.PARAMETER BackupRoot
+Backup root path for pre-delete copy.
+
+.EXAMPLE
+Invoke-SoftwareDistributionCleanup -BackupRoot $script:BackupRootPath
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRoot
+	)
+
+	$target = 'C:\Windows\SoftwareDistribution\Download'
+	if (-not (Test-Path -Path $target)) {
+		Write-LogUtc -Message 'SoftwareDistribution\Download not found; skipping.'
+		return [pscustomobject]@{ Cleared = $false; BackupPath = $null; UsedForceNoBackup = $false }
+	}
+
+	$systemDrive = [System.Environment]::GetEnvironmentVariable('SystemDrive')
+	$driveInfo = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $systemDrive)
+	$freeBytes = [double]$driveInfo.FreeSpace
+
+	$folderBytes = (Get-ChildItem -Path $target -Force -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+	if (-not $folderBytes) { $folderBytes = 0.0 }
+
+	$requiresForceNoBackup = $false
+	if ($freeBytes -gt 0 -and (($folderBytes / $freeBytes) -gt 0.8)) {
+		$requiresForceNoBackup = $true
+	}
+
+	$backupPath = $null
+	$usedForceNoBackup = $false
+
+	if ($requiresForceNoBackup) {
+		Write-LogUtc -Message 'SoftwareDistribution backup exceeds 80% free-space threshold.' -Level 'WARN'
+		if (-not $Force) {
+			Write-LogUtc -Message 'Skipping SoftwareDistribution cleanup because Force was not specified for no-backup path.' -Level 'WARN'
+			return [pscustomobject]@{ Cleared = $false; BackupPath = $null; UsedForceNoBackup = $false }
+		}
+
+		$usedForceNoBackup = $true
+		Write-LogUtc -Message 'Proceeding with SoftwareDistribution cleanup without backup due to Force override.' -Level 'WARN'
+	}
+	else {
+		$backupPath = Backup-TargetPath -TargetPath $target -BackupRoot $BackupRoot -Label 'SoftwareDistributionDownload'
+		if (-not $backupPath -and -not $DryRun) {
+			throw 'SoftwareDistribution cleanup blocked because backup was not created.'
+		}
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message '[DryRun] Would stop wuauserv, clear SoftwareDistribution\Download, and restart wuauserv.' -Level 'WARN'
+		return [pscustomobject]@{ Cleared = $false; BackupPath = $backupPath; UsedForceNoBackup = $usedForceNoBackup }
+	}
+
+	$serviceStopped = $false
+	try {
+		if ($PSCmdlet.ShouldProcess('wuauserv', 'Stop Windows Update service')) {
+			Stop-Service -Name wuauserv -Force -ErrorAction Stop
+			$serviceStopped = $true
+			Write-LogUtc -Message 'Stopped service: wuauserv'
+		}
+
+		$items = Get-ChildItem -Path $target -Force -ErrorAction SilentlyContinue
+		foreach ($item in $items) {
+			try {
+				if ($PSCmdlet.ShouldProcess($item.FullName, 'Remove SoftwareDistribution item')) {
+					Remove-Item -Path $item.FullName -Recurse -Force -ErrorAction Stop
+				}
+			}
+			catch {
+				Write-LogUtc -Message ("SoftwareDistribution item skip: {0}; Reason: {1}" -f $item.FullName, $_.Exception.Message) -Level 'WARN'
+			}
+		}
+
+		Write-LogUtc -Message 'Cleared SoftwareDistribution\Download contents.'
+		return [pscustomobject]@{ Cleared = $true; BackupPath = $backupPath; UsedForceNoBackup = $usedForceNoBackup }
+	}
+	finally {
+		if ($serviceStopped) {
+			try {
+				Start-Service -Name wuauserv -ErrorAction Stop
+				Write-LogUtc -Message 'Restarted service: wuauserv'
+			}
+			catch {
+				Write-LogUtc -Message ("Failed to restart wuauserv: {0}" -f $_.Exception.Message) -Level 'ERROR'
+			}
+		}
 	}
 }
 
 function Invoke-StorageOptimization {
-	try {
-		$storage = $script:Result.Hardware.StorageType
-		if ($storage -eq 'SSD') {
-			$trimCheck = & fsutil.exe behavior query DisableDeleteNotify 2>&1
-			Write-Log -Message "TRIM status query: $trimCheck" -Category 'Performance'
-			$trimDisabled = [bool]($trimCheck -match '=\s*1')
-			if ($trimDisabled) {
-				if (Confirm-Step -Title 'Enable SSD TRIM (DisableDeleteNotify=0)' -Warning 'TRIM appears disabled; enabling is recommended for SSD health and performance.') {
-					if ($DryRun) {
-						Write-Log -Message '[DryRun] Would run: fsutil behavior set DisableDeleteNotify 0' -Category 'Performance'
-					}
-					else {
-						& fsutil.exe behavior set DisableDeleteNotify 0 | Out-Null
-						Write-Log -Message 'Enabled SSD TRIM (DisableDeleteNotify=0).' -Category 'Performance'
-					}
-				}
-				else {
-					Write-Log -Message 'TRIM remains disabled by user choice.' -Level 'WARN' -Category 'Performance'
-				}
-			}
-			if ($DryRun) {
-				Write-Log -Message '[DryRun] Would schedule SSD optimization (retrim) and skip defragmentation.' -Category 'Performance'
-			}
-			else {
-				Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue | Out-Null
-			}
-			$ssdActionStatus = 'Performed'
-			$ssdActionReason = $null
-			if ($DryRun) {
-				$ssdActionStatus = 'Skipped'
-				$ssdActionReason = 'DryRun'
-			}
-			Add-ActionResult -Action 'Storage optimization (SSD)' -Status $ssdActionStatus -Reason $ssdActionReason
-		}
-		elseif ($storage -eq 'HDD') {
-			if (Confirm-Step -Title 'Schedule HDD defragmentation/optimization' -Warning 'Defragmentation is only offered for HDD scenarios.') {
-				if ($DryRun) {
-					Write-Log -Message '[DryRun] Would run Optimize-Volume -Defrag on C:.' -Category 'Performance'
-					Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Skipped' -Reason 'DryRun'
-				}
-				else {
-					Optimize-Volume -DriveLetter C -Defrag -Verbose -ErrorAction SilentlyContinue | Out-Null
-					Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Performed'
-				}
-			}
-			else {
-				Add-ActionResult -Action 'Storage optimization (HDD defrag)' -Status 'Skipped' -Reason 'UserDeclined'
-			}
-		}
-		else {
-			Add-ActionResult -Action 'Storage optimization' -Status 'Skipped' -Reason 'UnknownStorageType'
-		}
-	}
-	catch {
-		Write-Log -Message "Storage optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Storage optimization' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
+<#
+.SYNOPSIS
+Runs ReTrim/Defrag based on storage type and free-space thresholds.
 
-function Invoke-VisualEffectsOptimization {
-	try {
-		$mode = 'BalancedReducedAnimations'
-		if ($Aggressive) {
-			$mode = 'BestPerformance'
-		}
-		if (-not (Confirm-Step -Title "Apply visual effects mode: $mode" -Warning 'Registry backup will be exported before changes.')) {
-			Add-ActionResult -Action 'Visual effects optimization' -Status 'Skipped' -Reason 'UserDeclined'
-			return
-		}
+.DESCRIPTION
+Uses hardware profile storage map to apply ReTrim on SSD and Defrag on HDD only when
+free space is at least 15% for that volume.
 
-		$backup = Export-RegistryBackup -RegistryPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualEffects_backup'
-		if ($DryRun) {
-			Write-Log -Message "[DryRun] Would apply visual effects mode $mode (backup: $backup)." -Category 'Performance'
-			Add-ActionResult -Action 'Visual effects optimization' -Status 'Skipped' -Reason 'DryRun'
-			return
-		}
+.PARAMETER HardwareProfile
+Hardware profile object from Module 1.
 
-		New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
-		if ($Aggressive) {
-			Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2 -Type DWord
-		}
-		else {
-			Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 3 -Type DWord
-			Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name UserPreferencesMask -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -Type Binary
-		}
-		Add-ActionResult -Action 'Visual effects optimization' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Visual effects optimization failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Visual effects optimization' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Invoke-OptionalRegistryTweaks {
-	if (-not $Aggressive) {
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Skipped' -Reason 'AggressiveNotSet'
-		return
-	}
-
-	if (-not (Confirm-Step -Title 'Apply optional aggressive registry performance tweaks' -Warning 'Registry exports will be created before changes.')) {
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Skipped' -Reason 'UserDeclined'
-		return
-	}
-
-	try {
-		$backup1 = Export-RegistryBackup -RegistryPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'MemoryManagement_backup'
-		if (-not $DryRun) {
-			Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'LargeSystemCache' -Type DWord -Value 0
-			Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePagingExecutive' -Type DWord -Value 0
-		}
-		Write-Log -Message "Optional registry tweaks applied. Backup: $backup1" -Category 'Performance'
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Performed'
-	}
-	catch {
-		Write-Log -Message "Optional registry tweaks failed: $($_.Exception.Message)" -Level 'WARN' -Category 'Performance'
-		Add-ActionResult -Action 'Optional registry tweaks' -Status 'Failed' -Reason $_.Exception.Message
-	}
-}
-
-function Write-FinalSummary {
-	$script:Result.EndedAt = Get-Date
-	$duration = New-TimeSpan -Start $script:StartTime -End $script:Result.EndedAt
-
-	$summaryTxt = Join-Path $script:RunRoot 'summary_report.txt'
-
-	$lines = @(
-		"Run ID: $($script:Result.RunId)",
-		"Started: $($script:Result.StartedAt)",
-		"Ended: $($script:Result.EndedAt)",
-		"Duration: $([int]$duration.TotalSeconds) sec",
-		"User: $($script:Result.User)",
-		"Machine: $($script:Result.Machine)",
-		"DryRun: $($script:Result.DryRun)",
-		"Actions Performed: $($script:Result.ActionsPerformed.Count)",
-		"Actions Skipped: $($script:Result.ActionsSkipped.Count)",
-		"Actions Failed: $($script:Result.ActionsFailed.Count)",
-		"Files Removed: $($script:Result.FilesRemoved.Count)",
-		"Services Changed: $($script:Result.ServicesChanged.Count)",
-		"Drivers Backed Up: $($script:Result.DriversBackedUp.Count)",
-		"Drivers Removed: $($script:Result.DriversRemoved.Count)",
-		"---",
-		"Performed:",
-		($script:Result.ActionsPerformed -join [Environment]::NewLine),
-		"---",
-		"Skipped:",
-		($script:Result.ActionsSkipped -join [Environment]::NewLine),
-		"---",
-		"Failed:",
-		($script:Result.ActionsFailed -join [Environment]::NewLine),
-		"---",
-		"Recommendations:",
-		($script:Result.Recommendations -join [Environment]::NewLine)
+.EXAMPLE
+Invoke-StorageOptimization -HardwareProfile $script:HardwareProfile
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile
 	)
 
-	$lines | Set-Content -Path $summaryTxt -Encoding UTF8
-	$script:Result | ConvertTo-Json -Depth 8 | Set-Content -Path $script:ReportPath -Encoding UTF8
+	$results = @()
+	$logicalDisks = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3"
 
-	Write-Log -Message "Final summary written: $summaryTxt" -Category 'Summary'
-	Write-Log -Message "JSON summary written: $script:ReportPath" -Category 'Summary'
+	foreach ($disk in $logicalDisks) {
+		$letter = $disk.DeviceID
+		$freePercent = if ($disk.Size -gt 0) { [math]::Round((($disk.FreeSpace / $disk.Size) * 100), 2) } else { 0 }
+		$kind = 'HDD'
+		if ($HardwareProfile.StorageType.ContainsKey($letter)) {
+			$kind = [string]$HardwareProfile.StorageType[$letter]
+		}
 
-	Write-Host "`n===== Optimize-Windows Summary ====="
-	Write-Host "Run folder: $script:RunRoot"
-	Write-Host "Performed: $($script:Result.ActionsPerformed.Count)"
-	Write-Host "Skipped: $($script:Result.ActionsSkipped.Count)"
-	Write-Host "Failed: $($script:Result.ActionsFailed.Count)"
-	Write-Host "ExitCode: $script:ExitCode"
-	Write-Host '===================================='
+		if ($kind -eq 'SSD') {
+			if ($DryRun) {
+				Write-LogUtc -Message ("[DryRun] Would run ReTrim on {0}" -f $letter) -Level 'WARN'
+			}
+			else {
+				if ($PSCmdlet.ShouldProcess($letter, 'Optimize-Volume -ReTrim')) {
+					Optimize-Volume -DriveLetter $letter.TrimEnd(':') -ReTrim -Verbose:$false
+					Write-LogUtc -Message ("ReTrim completed for SSD volume: {0}" -f $letter)
+				}
+			}
+			$results += ("{0}:ReTrim" -f $letter)
+		}
+		else {
+			if ($freePercent -lt 15) {
+				Write-LogUtc -Message ("Skipped defrag for {0}: free space {1}% < 15% threshold." -f $letter, $freePercent) -Level 'WARN'
+				$results += ("{0}:DefragSkippedLowFreeSpace" -f $letter)
+				continue
+			}
+
+			if ($DryRun) {
+				Write-LogUtc -Message ("[DryRun] Would run Defrag on {0}" -f $letter) -Level 'WARN'
+			}
+			else {
+				if ($PSCmdlet.ShouldProcess($letter, 'Optimize-Volume -Defrag')) {
+					Optimize-Volume -DriveLetter $letter.TrimEnd(':') -Defrag -Verbose:$false
+					Write-LogUtc -Message ("Defrag completed for HDD volume: {0}" -f $letter)
+				}
+			}
+			$results += ("{0}:Defrag" -f $letter)
+		}
+	}
+
+	return $results
 }
 
-function Test-IsWindowsPlatform {
-    # PowerShell 6+ exposes $IsWindows; Windows PowerShell 5.1 does not.
-    # Under Set-StrictMode, direct use of undefined $IsWindows throws.
-    if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) {
-        return [bool]$IsWindows
-    }
+#endregion Module 3 Helpers
 
-    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+#region Module 3
+
+function Invoke-Module3SafeCleanup {
+<#
+.SYNOPSIS
+Runs Module 3 safe cleanup routines.
+
+.DESCRIPTION
+Performs guarded cleanup tasks with permanent exclusions, backup-before-delete policy,
+forced confirmation requirements for sensitive paths, storage optimization decisions,
+and comprehensive logging.
+
+.PARAMETER HardwareProfile
+Hardware profile object from Module 1.
+
+.PARAMETER BackupRootPath
+Root backup path created in Module 2.
+
+.PARAMETER CleanupAgeDays
+Minimum age in days for orphaned temp file removal.
+
+.EXAMPLE
+$module3 = Invoke-Module3SafeCleanup -HardwareProfile $script:HardwareProfile -BackupRootPath $script:BackupRootPath -CleanupAgeDays $CleanupAgeDays
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRootPath,
+
+		[Parameter(Mandatory = $true)]
+		[int]$CleanupAgeDays
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module3-SafeCleanup'
+
+	try {
+		$cleanupChanges = @()
+
+		$profiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
+			$_.LocalPath -like 'C:\Users\*' -and -not $_.Special
+		}
+
+		foreach ($profile in $profiles) {
+			$userTemp = Join-Path -Path $profile.LocalPath -ChildPath 'AppData\Local\Temp'
+			if (-not (Test-Path -Path $userTemp)) { continue }
+
+			$confirmed = Request-ExplicitRuntimeConfirmation -PromptMessage ("Clear per-user Temp for [{0}] at [{1}]?" -f $profile.LocalPath, $userTemp)
+			if (-not $confirmed) {
+				$result.Warnings += ("Skipped per-user temp cleanup by operator decision: {0}" -f $userTemp)
+				Write-LogUtc -Message ("Skipped per-user temp cleanup by operator decision: {0}" -f $userTemp) -Level 'WARN'
+				continue
+			}
+
+			$userTempResult = Clear-DirectoryFilesSafe -TargetPath $userTemp -BackupRoot $BackupRootPath -Label ("UserTemp_{0}" -f (($profile.LocalPath -replace '[^A-Za-z0-9]', '_'))) -RequireExplicitConfirmation:$false
+			$cleanupChanges += ("UserTemp={0};Removed={1};Skipped={2}" -f $userTemp, $userTempResult.Removed, $userTempResult.Skipped)
+		}
+
+		$winTempResult = Clear-DirectoryFilesSafe -TargetPath 'C:\Windows\Temp' -BackupRoot $BackupRootPath -Label 'WindowsTemp'
+		$cleanupChanges += ("WindowsTemp Removed={0};Skipped={1}" -f $winTempResult.Removed, $winTempResult.Skipped)
+
+		if ($DryRun) {
+			Write-LogUtc -Message '[DryRun] Would invoke cleanmgr /sagerun:1' -Level 'WARN'
+		}
+		else {
+			if ($PSCmdlet.ShouldProcess('cleanmgr.exe', 'Run Disk Cleanup (sagerun:1)')) {
+				$cleanMgrOutput = & cleanmgr.exe /sagerun:1 2>&1
+				$cleanMgrLog = Join-Path -Path $script:ResolvedLogPath -ChildPath ("cleanmgr_{0}.log" -f $script:RunId)
+				$cleanMgrOutput | Set-Content -Path $cleanMgrLog -Encoding UTF8
+				Write-LogUtc -Message ("Disk Cleanup completed. Output log: {0}" -f $cleanMgrLog)
+				$cleanupChanges += 'DiskCleanupExecuted'
+			}
+		}
+
+		$sdResult = Invoke-SoftwareDistributionCleanup -BackupRoot $BackupRootPath
+		$cleanupChanges += ("SoftwareDistribution Cleared={0};ForceNoBackup={1}" -f $sdResult.Cleared, $sdResult.UsedForceNoBackup)
+		if ($sdResult.UsedForceNoBackup) {
+			$result.Warnings += 'SoftwareDistribution was cleared without backup due to >80% free-space guard and Force override.'
+		}
+
+		if ($DryRun) {
+			Write-LogUtc -Message '[DryRun] Would clear Delivery Optimization cache.' -Level 'WARN'
+		}
+		else {
+			if ($PSCmdlet.ShouldProcess('DeliveryOptimization', 'Clear Delivery Optimization cache')) {
+				try {
+					Delete-DeliveryOptimizationCache -Force -ErrorAction Stop
+					Write-LogUtc -Message 'Delivery Optimization cache cleared.'
+					$cleanupChanges += 'DeliveryOptimizationCacheCleared'
+				}
+				catch {
+					Write-LogUtc -Message ("Delivery Optimization cache clear failed: {0}" -f $_.Exception.Message) -Level 'WARN'
+					$result.Warnings += 'Delivery Optimization cache cleanup failed or not available.'
+				}
+			}
+		}
+
+		$orphanRoots = @(
+			'C:\Windows\Temp',
+			'C:\ProgramData\Temp',
+			'C:\Temp'
+		)
+		$cutoff = (Get-Date).AddDays(-1 * $CleanupAgeDays)
+		foreach ($root in $orphanRoots) {
+			if (-not (Test-Path -Path $root)) { continue }
+			if (Test-IsPathPermanentlyExcluded -Path $root) { continue }
+
+			if ($DryRun) {
+				Write-LogUtc -Message ("[DryRun] Would remove orphaned temp files older than {0} days in {1}" -f $CleanupAgeDays, $root) -Level 'WARN'
+				continue
+			}
+
+			$oldFiles = Get-ChildItem -Path $root -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $cutoff }
+			foreach ($f in $oldFiles) {
+				try {
+					if ($PSCmdlet.ShouldProcess($f.FullName, 'Remove orphaned temp file')) {
+						Remove-Item -Path $f.FullName -Force -ErrorAction Stop
+					}
+				}
+				catch {
+					Write-LogUtc -Message ("Skipped orphaned file: {0}; Reason: {1}" -f $f.FullName, $_.Exception.Message) -Level 'WARN'
+				}
+			}
+			$cleanupChanges += ("OrphanedTempProcessed={0}" -f $root)
+		}
+
+		$storageOps = Invoke-StorageOptimization -HardwareProfile $HardwareProfile
+		$cleanupChanges += $storageOps
+
+		if ($AutoApprove -and -not $Force) {
+			Write-LogUtc -Message 'Prefetch cleanup skipped: AutoApprove present without Force.' -Level 'WARN'
+			$result.Warnings += 'Prefetch cleanup skipped because AutoApprove requires Force for this action.'
+		}
+		else {
+			$prefetchPath = 'C:\Windows\Prefetch'
+			if (Test-Path -Path $prefetchPath) {
+				$prefetchConfirm = Request-ExplicitRuntimeConfirmation -PromptMessage 'Clear Prefetch files for this run?'
+				if ($prefetchConfirm) {
+					$prefetchResult = Clear-DirectoryFilesSafe -TargetPath $prefetchPath -BackupRoot $BackupRootPath -Label 'Prefetch'
+					$cleanupChanges += ("Prefetch Removed={0};Skipped={1}" -f $prefetchResult.Removed, $prefetchResult.Skipped)
+				}
+				else {
+					Write-LogUtc -Message 'Prefetch cleanup declined by operator.'
+					$result.Warnings += 'Prefetch cleanup declined by operator.'
+				}
+			}
+		}
+
+		$result.ChangesApplied += $cleanupChanges
+		Write-LogUtc -Message 'Module 3 completed successfully.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 3 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
 }
 
-function Invoke-Main {
-    try {
-        Initialize-RunFolders
-        Write-Log -Message 'Optimize-Windows run started.' -Category 'Start'
+#endregion Module 3
 
-        if (-not (Test-IsWindowsPlatform)) {
-            throw 'This script supports Windows only.'
-        }
+#region Module 4 Helpers
 
-        Assert-Administrator
-        Assert-OsCompatibility
-        Assert-UpdateSafeState
-        New-SystemRestorePoint
-        Get-HardwareProfile | Out-Null
+function Get-PnPUtilDriverRecords {
+<#
+.SYNOPSIS
+Parses pnputil driver enumeration into structured records.
 
-        Invoke-SystemFileValidation
-        Invoke-ComponentStoreCleanup
-        Invoke-WindowsUpdateCleanup
-        Invoke-DeliveryOptimizationCleanup
-        Invoke-TemporaryFilesCleanup
-        Invoke-ThumbnailAndBrowserCacheCleanup
-        Invoke-RecycleBinCleanup
-        Invoke-PrefetchCleanup
-        Invoke-SearchIndexRebuild
-        Invoke-TelemetryRecommendations
+.DESCRIPTION
+Runs pnputil /enum-drivers and transforms key fields into objects for deduplication planning.
 
-        Invoke-ServiceStartupOptimization
+.EXAMPLE
+$records = Get-PnPUtilDriverRecords
+#>
+	[CmdletBinding()]
+	param()
 
-        Invoke-DriverManagement
-        Invoke-DriverAutoUpdate
+	$output = & pnputil.exe /enum-drivers 2>&1
+	$records = @()
+	$current = @{}
 
-        Invoke-BloatwareWorkflow
+	foreach ($line in $output) {
+		if ($line -match '^\s*$') {
+			if ($current.ContainsKey('PublishedName')) {
+				$records += [pscustomobject]@{
+					INFName         = $current.PublishedName
+					ProviderName    = $current.ProviderName
+					DriverClass     = $current.ClassName
+					DriverVersion   = $current.DriverVersion
+					Signer          = $current.SignerName
+					PublishedDate   = $current.DriverDate
+					HardwareId      = $null
+					DeviceInstanceId = $null
+					PackageName     = $current.OriginalName
+					DriverStorePath = $null
+				}
+			}
+			$current = @{}
+			continue
+		}
 
-        Invoke-PowerPlanOptimization
-        Invoke-StorageOptimization
-        Invoke-VisualEffectsOptimization
-        Invoke-OptionalRegistryTweaks
-    }
-    catch {
-        Write-Log -Message "Fatal run error: $($_.Exception.Message)" -Level 'ERROR' -Category 'Main'
-        if ($script:ExitCode -lt 2) { $script:ExitCode = 2 }
-    }
-    finally {
-        Write-FinalSummary
-    }
+		if ($line -match '^\s*Published Name\s*:\s*(.+)$') { $current.PublishedName = $matches[1].Trim(); continue }
+		if ($line -match '^\s*Original Name\s*:\s*(.+)$') { $current.OriginalName = $matches[1].Trim(); continue }
+		if ($line -match '^\s*Provider Name\s*:\s*(.+)$') { $current.ProviderName = $matches[1].Trim(); continue }
+		if ($line -match '^\s*Class Name\s*:\s*(.+)$') { $current.ClassName = $matches[1].Trim(); continue }
+		if ($line -match '^\s*Signer Name\s*:\s*(.+)$') { $current.SignerName = $matches[1].Trim(); continue }
+		if ($line -match '^\s*Driver Date and Version\s*:\s*(.+)$') {
+			$dv = $matches[1].Trim()
+			$current.DriverDate = $dv
+			$current.DriverVersion = ($dv -split '\s+')[ -1 ]
+			continue
+		}
+	}
 
-    if ($script:Result.ActionsFailed.Count -gt 0 -and $script:ExitCode -eq 0) {
-        $script:ExitCode = 1
-    }
+	if ($current.ContainsKey('PublishedName')) {
+		$records += [pscustomobject]@{
+			INFName         = $current.PublishedName
+			ProviderName    = $current.ProviderName
+			DriverClass     = $current.ClassName
+			DriverVersion   = $current.DriverVersion
+			Signer          = $current.SignerName
+			PublishedDate   = $current.DriverDate
+			HardwareId      = $null
+			DeviceInstanceId = $null
+			PackageName     = $current.OriginalName
+			DriverStorePath = $null
+		}
+	}
 
-    exit $script:ExitCode
+	# Enrich with Win32_PnPSignedDriver hardware and device mapping.
+	$signed = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+		Select-Object DeviceID, InfName, DriverVersion, DriverProviderName, IsSigned, DriverDate
+
+	foreach ($rec in $records) {
+		$match = $signed | Where-Object { $_.InfName -eq $rec.INFName } | Select-Object -First 1
+		if ($match) {
+			$rec.HardwareId = $match.DeviceID
+			$rec.DeviceInstanceId = $match.DeviceID
+			if ($match.DriverVersion) { $rec.DriverVersion = [string]$match.DriverVersion }
+			if ($match.DriverProviderName) { $rec.ProviderName = [string]$match.DriverProviderName }
+		}
+	}
+
+	return $records
 }
 
-# Explicit policy note: This script does not exfiltrate user data and does not send telemetry externally.
-Invoke-Main
->>>>>>> 8afcec378620874d15406765dfa7b7d52c83ac12
+function Get-LoadedDriverBinarySet {
+<#
+.SYNOPSIS
+Gets loaded driver binary names from driverquery.
+
+.DESCRIPTION
+Collects loaded kernel driver module names as a supplemental in-use signal.
+
+.EXAMPLE
+$loaded = Get-LoadedDriverBinarySet
+#>
+	[CmdletBinding()]
+	param()
+
+	$csv = & driverquery.exe /FO CSV /V 2>$null | ConvertFrom-Csv
+	$set = New-Object System.Collections.Generic.HashSet[string]
+	foreach ($row in $csv) {
+		if ($row.'Path Name') {
+			$fileName = [System.IO.Path]::GetFileName($row.'Path Name')
+			if ($fileName) {
+				[void]$set.Add($fileName.ToLowerInvariant())
+			}
+		}
+	}
+	return $set
+}
+
+function Get-ProtectedDriverInfSet {
+<#
+.SYNOPSIS
+Determines INFs considered in-use/protected.
+
+.DESCRIPTION
+Marks drivers as protected when bound to PnP devices in OK/Unknown state. Also logs loaded-driver
+evidence from driverquery for additional context.
+
+.EXAMPLE
+$protected = Get-ProtectedDriverInfSet
+#>
+	[CmdletBinding()]
+	param()
+
+	$protected = New-Object System.Collections.Generic.HashSet[string]
+
+	$pnp = Get-PnpDevice -ErrorAction SilentlyContinue | Select-Object InstanceId, Status
+	$signed = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+		Select-Object DeviceID, InfName, DriverName
+
+	foreach ($drv in $signed) {
+		if (-not $drv.InfName) { continue }
+		$device = $pnp | Where-Object { $_.InstanceId -eq $drv.DeviceID } | Select-Object -First 1
+		if ($device -and ($device.Status -eq 'OK' -or $device.Status -eq 'Unknown')) {
+			[void]$protected.Add($drv.InfName)
+		}
+	}
+
+	$loaded = Get-LoadedDriverBinarySet
+	Write-LogUtc -Message ("Loaded driver binary sample count from driverquery: {0}" -f $loaded.Count)
+	return $protected
+}
+
+function Test-IsTrustedSigner {
+<#
+.SYNOPSIS
+Evaluates signer trust class.
+
+.DESCRIPTION
+Returns trust rank for selection algorithm.
+
+.PARAMETER Signer
+Signer text from pnputil record.
+
+.EXAMPLE
+$rank = Test-IsTrustedSigner -Signer $record.Signer
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $false)]
+		[string]$Signer
+	)
+
+	if (-not $Signer) { return 0 }
+	$s = $Signer.ToLowerInvariant()
+	if ($s -match 'microsoft') { return 3 }
+	if ($s -match 'windows hardware compatibility publisher|publisher|corporation|inc\.|llc') { return 2 }
+	if ($s -match 'unsigned|not signed|unknown') { return 0 }
+	return 1
+}
+
+function Get-VersionObjectSafe {
+<#
+.SYNOPSIS
+Converts version text to System.Version safely.
+
+.DESCRIPTION
+Fallbacks to 0.0.0.0 when version parsing fails.
+
+.PARAMETER VersionText
+Version string.
+
+.EXAMPLE
+$v = Get-VersionObjectSafe -VersionText $record.DriverVersion
+#>
+	[CmdletBinding()]
+	param(
+		[string]$VersionText
+	)
+
+	try {
+		return [version]$VersionText
+	}
+	catch {
+		return [version]'0.0.0.0'
+	}
+}
+
+function Get-DriverDeduplicationPlan {
+<#
+.SYNOPSIS
+Builds duplicate-driver keep/remove plan.
+
+.DESCRIPTION
+Groups drivers by hardware identity and applies selection logic:
+highest version, signer preference, trusted fallback, protected override.
+
+.PARAMETER DriverRecords
+Parsed driver records.
+
+.PARAMETER ProtectedInfSet
+Set of INF names considered protected.
+
+.EXAMPLE
+$plan = Get-DriverDeduplicationPlan -DriverRecords $records -ProtectedInfSet $protected
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[array]$DriverRecords,
+
+		[Parameter(Mandatory = $true)]
+		[object]$ProtectedInfSet
+	)
+
+	$groups = $DriverRecords | Group-Object {
+		if ($_.HardwareId) {
+			$_.HardwareId
+		}
+		elseif ($_.DeviceInstanceId) {
+			$_.DeviceInstanceId
+		}
+		else {
+			"INFONLY::{0}" -f $_.INFName
+		}
+	}
+
+	$plan = @()
+
+	foreach ($g in $groups) {
+		if ($g.Count -le 1) { continue }
+
+		$items = $g.Group
+		$protectedItems = $items | Where-Object { $ProtectedInfSet.Contains($_.INFName) }
+
+		$keep = $null
+		$reason = $null
+
+		if ($protectedItems.Count -gt 0) {
+			$keep = $protectedItems | Sort-Object { Get-VersionObjectSafe -VersionText $_.DriverVersion } -Descending | Select-Object -First 1
+			$reason = 'Protected in-use driver retained.'
+		}
+		else {
+			$sorted = $items | Sort-Object `
+				@{ Expression = { Get-VersionObjectSafe -VersionText $_.DriverVersion }; Descending = $true }, `
+				@{ Expression = { Test-IsTrustedSigner -Signer $_.Signer }; Descending = $true }
+
+			$top = $sorted | Select-Object -First 1
+			$topTrust = Test-IsTrustedSigner -Signer $top.Signer
+
+			if ($topTrust -eq 0) {
+				$trusted = $sorted | Where-Object { (Test-IsTrustedSigner -Signer $_.Signer) -ge 2 } | Select-Object -First 1
+				if ($trusted) {
+					$keep = $trusted
+					$reason = 'Newest was untrusted/unsigned; retained latest trusted driver.'
+				}
+				else {
+					$keep = $top
+					$reason = 'No trusted alternative available; retained highest version.'
+				}
+			}
+			else {
+				$keep = $top
+				$reason = 'Retained highest version with signer preference.'
+			}
+		}
+
+		$remove = $items | Where-Object { $_.INFName -ne $keep.INFName }
+
+		$plan += [pscustomobject]@{
+			GroupKey           = $g.Name
+			HardwareId         = $keep.HardwareId
+			DeviceInstanceId   = $keep.DeviceInstanceId
+			DriverToKeep       = $keep
+			DriversToRemove    = @($remove)
+			Reason             = $reason
+			InUseProtected     = ($protectedItems.Count -gt 0)
+		}
+	}
+
+	return $plan
+}
+
+function Request-StandardConfirmation {
+<#
+.SYNOPSIS
+Requests standard yes/no confirmation.
+
+.DESCRIPTION
+Uses AutoApprove to skip interaction unless explicit user response is required.
+
+.PARAMETER Message
+Prompt message.
+
+.EXAMPLE
+$ok = Request-StandardConfirmation -Message 'Remove driver oem12.inf?'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Message
+	)
+
+	if ($AutoApprove) {
+		Write-LogUtc -Message ("AutoApprove accepted confirmation prompt: {0}" -f $Message) -Level 'WARN'
+		return $true
+	}
+
+	$inputValue = Read-Host ("{0} Type Y to continue" -f $Message)
+	return ($inputValue -match '^(Y|y)$')
+}
+
+function Get-DriverRemovalManifestPath {
+	[CmdletBinding()]
+	param()
+
+	return (Join-Path -Path $script:ResolvedBackupPath -ChildPath ("DriverRemovalManifest_{0}.json" -f $script:RunId))
+}
+
+function Add-DriverRemovalManifestEntry {
+<#
+.SYNOPSIS
+Appends entry to driver removal manifest.
+
+.DESCRIPTION
+Maintains a JSON array manifest for each driver removal backup and action.
+
+.PARAMETER Entry
+Entry object.
+
+.EXAMPLE
+Add-DriverRemovalManifestEntry -Entry $entry
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$Entry
+	)
+
+	$path = Get-DriverRemovalManifestPath
+	$list = @()
+	if (Test-Path -Path $path) {
+		$existing = Get-Content -Path $path -Raw | ConvertFrom-Json
+		if ($existing -is [System.Array]) { $list = @($existing) } else { $list = @($existing) }
+	}
+
+	$list += $Entry
+	$list | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+	Write-LogUtc -Message ("Driver removal manifest appended: {0}" -f $path)
+}
+
+#endregion Module 4 Helpers
+
+#region Module 4
+
+function Invoke-Module4DriverManagement {
+<#
+.SYNOPSIS
+Runs Module 4 duplicate driver preview/removal workflow.
+
+.DESCRIPTION
+Enumerates drivers, builds deduplication plan, supports preview-only mode, and executes
+backup -> manifest -> confirmation -> delete -> verify -> rollback chain for removals.
+
+.PARAMETER HardwareProfile
+Hardware profile from Module 1.
+
+.PARAMETER BackupRootPath
+Backup root from Module 2.
+
+.PARAMETER PreviewDriversToRemove
+Preview-only mode.
+
+.PARAMETER RemoveDuplicateDrivers
+Enable removal mode.
+
+.EXAMPLE
+$module4 = Invoke-Module4DriverManagement -HardwareProfile $script:HardwareProfile -BackupRootPath $script:BackupRootPath -PreviewDriversToRemove:$PreviewDriversToRemove -RemoveDuplicateDrivers:$RemoveDuplicateDrivers
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRootPath,
+
+		[switch]$PreviewDriversToRemove,
+		[switch]$RemoveDuplicateDrivers
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module4-DriverManagement'
+
+	try {
+		$records = Get-PnPUtilDriverRecords
+		$protectedSet = Get-ProtectedDriverInfSet
+		$plan = Get-DriverDeduplicationPlan -DriverRecords $records -ProtectedInfSet $protectedSet
+
+		$previewRows = foreach ($group in $plan) {
+			[pscustomobject]@{
+				HardwareId      = if ($group.HardwareId) { $group.HardwareId } else { $group.GroupKey }
+				DriverToKeep    = $group.DriverToKeep.INFName
+				DriversToRemove = ($group.DriversToRemove | ForEach-Object { $_.INFName }) -join ', '
+				Reason          = $group.Reason
+				InUseProtected  = $group.InUseProtected
+			}
+		}
+
+		if ($previewRows.Count -eq 0) {
+			Write-LogUtc -Message 'Driver deduplication found no duplicate groups.'
+			$result.ChangesApplied += 'No duplicate drivers found.'
+			$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+			return $result
+		}
+
+		$previewText = $previewRows | Format-Table -AutoSize | Out-String
+		Write-Host $previewText
+		Write-LogUtc -Message "Driver preview table generated.`n$previewText"
+		$result.ChangesApplied += 'Driver preview table generated.'
+
+		if ($PreviewDriversToRemove -and -not $RemoveDuplicateDrivers) {
+			Write-LogUtc -Message 'Preview mode only requested; no driver changes will be made.'
+			$result.Warnings += 'Preview mode active: no changes applied.'
+			$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+			return $result
+		}
+
+		if (-not $RemoveDuplicateDrivers) {
+			Write-LogUtc -Message 'Driver removal switch not enabled; module completed in analysis mode.'
+			$result.Warnings += 'RemoveDuplicateDrivers not set; no removals performed.'
+			$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+			return $result
+		}
+
+		$driverRemovalRoot = Join-Path -Path $BackupRootPath -ChildPath 'DriverRemovals'
+		if (-not (Test-Path -Path $driverRemovalRoot)) {
+			if (-not $DryRun) {
+				New-Item -Path $driverRemovalRoot -ItemType Directory -Force | Out-Null
+			}
+		}
+
+		foreach ($group in $plan) {
+			foreach ($candidate in $group.DriversToRemove) {
+				if ($protectedSet.Contains($candidate.INFName)) {
+					Write-LogUtc -Message ("Protected driver skipped: {0}" -f $candidate.INFName) -Level 'WARN'
+					$result.Warnings += ("Protected driver skipped: {0}" -f $candidate.INFName)
+					continue
+				}
+
+				$backupDestination = Join-Path -Path $driverRemovalRoot -ChildPath $candidate.INFName
+				$manifestEntry = [pscustomobject]@{
+					TimestampUtc      = (Get-Date).ToUniversalTime().ToString('o')
+					HardwareId        = $group.HardwareId
+					DeviceInstanceId  = $group.DeviceInstanceId
+					INFName           = $candidate.INFName
+					KeepINF           = $group.DriverToKeep.INFName
+					BackupDestination = $backupDestination
+					Reason            = $group.Reason
+					Action            = 'PlannedRemoval'
+				}
+
+				if ($DryRun) {
+					Write-LogUtc -Message ("[DryRun] Would export and remove duplicate driver: {0}" -f $candidate.INFName) -Level 'WARN'
+					continue
+				}
+
+				if ($PSCmdlet.ShouldProcess($candidate.INFName, 'Export duplicate driver backup')) {
+					$exportOut = & pnputil.exe /export-driver $candidate.INFName $backupDestination 2>&1
+					if ($LASTEXITCODE -ne 0) {
+						throw ("Driver export failed for {0}. Output: {1}" -f $candidate.INFName, ($exportOut -join ' '))
+					}
+					Write-LogUtc -Message ("Driver backup export completed: {0} -> {1}" -f $candidate.INFName, $backupDestination)
+				}
+
+				Add-DriverRemovalManifestEntry -Entry $manifestEntry
+
+				$confirm = Request-StandardConfirmation -Message ("Remove duplicate driver {0} (keep {1})?" -f $candidate.INFName, $group.DriverToKeep.INFName)
+				if (-not $confirm) {
+					Write-LogUtc -Message ("Operator skipped removal for driver: {0}" -f $candidate.INFName) -Level 'WARN'
+					$result.Warnings += ("Removal skipped by operator: {0}" -f $candidate.INFName)
+					continue
+				}
+
+				if ($PSCmdlet.ShouldProcess($candidate.INFName, 'Delete duplicate driver package')) {
+					$deleteOut = & pnputil.exe /delete-driver $candidate.INFName /uninstall /force 2>&1
+					if ($LASTEXITCODE -ne 0) {
+						throw ("Driver deletion failed for {0}. Output: {1}" -f $candidate.INFName, ($deleteOut -join ' '))
+					}
+					Write-LogUtc -Message ("Driver removed: {0}" -f $candidate.INFName)
+				}
+
+				$deviceError = $false
+				if ($group.DeviceInstanceId) {
+					$postDevice = Get-PnpDevice -InstanceId $group.DeviceInstanceId -ErrorAction SilentlyContinue
+					if ($postDevice -and $postDevice.Status -notin @('OK', 'Unknown')) {
+						$deviceError = $true
+					}
+				}
+
+				if ($deviceError) {
+					Write-LogUtc -Message ("Post-removal device issue detected for {0}; starting rollback." -f $candidate.INFName) -Level 'ERROR'
+					$exportedInf = Get-ChildItem -Path $backupDestination -Recurse -Filter '*.inf' -ErrorAction SilentlyContinue | Select-Object -First 1
+					if (-not $exportedInf) {
+						throw ("Rollback failed for {0}: no exported INF found in backup." -f $candidate.INFName)
+					}
+
+					$rollbackOut = & pnputil.exe /add-driver $exportedInf.FullName /install 2>&1
+					if ($LASTEXITCODE -ne 0) {
+						throw ("Rollback add-driver failed for {0}. Output: {1}" -f $candidate.INFName, ($rollbackOut -join ' '))
+					}
+
+					Write-LogUtc -Message ("Rollback completed for driver: {0}" -f $candidate.INFName) -Level 'WARN'
+					$result.RollbackSteps += ("Re-added {0} from {1}" -f $candidate.INFName, $exportedInf.FullName)
+					$result.Warnings += ("Driver {0} removed then rolled back due to device status." -f $candidate.INFName)
+				}
+				else {
+					$result.ChangesApplied += ("Driver removed: {0}" -f $candidate.INFName)
+				}
+			}
+		}
+
+		Write-LogUtc -Message 'Module 4 completed successfully.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 4 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 4
+
+#region Orchestration (Chunks 1-4)
+
+try {
+	Initialize-ExecutionContext -LogPath $LogPath -BackupPath $BackupPath
+
+	$script:AllModuleResults = @()
+
+	if ($SelfTest) {
+		$selfTest = Invoke-SelfTestMode
+		if ($selfTest.MissingRequiredCount -gt 0) {
+			Write-Error 'SelfTest detected missing required commands. See self-test report for details.'
+			exit 1
+		}
+
+		return
+	}
+
+	$module1Result = Invoke-Module1EnvironmentAndHardwareDetection -IgnoreOSCheck:$IgnoreOSCheck
+	$script:AllModuleResults += $module1Result
+	if (-not $module1Result.Success) {
+		throw ('Stopping because Module 1 failed: {0}' -f ($module1Result.Errors -join '; '))
+	}
+	$script:HardwareProfile = $module1Result.HardwareProfile
+	Write-LogUtc -Message 'Script closure policy set: DISM/SFC will execute only in final module at end of script.'
+
+	$module2Result = Invoke-Module2PrechecksAndBackups -HardwareProfile $script:HardwareProfile -SkipRestorePoint:$SkipRestorePoint
+	$script:AllModuleResults += $module2Result
+	if (-not $module2Result.Success) {
+		throw ('Stopping because Module 2 failed: {0}' -f ($module2Result.Errors -join '; '))
+	}
+	$script:BackupManifestPath = $module2Result.BackupManifestPath
+	$script:BackupRootPath = $module2Result.BackupRootPath
+	Write-LogUtc -Message 'Closure guard remains active: DISM/SFC execution is reserved for final module only.'
+
+	$module3Result = Invoke-Module3SafeCleanup -HardwareProfile $script:HardwareProfile -BackupRootPath $script:BackupRootPath -CleanupAgeDays $CleanupAgeDays
+	$script:AllModuleResults += $module3Result
+	if (-not $module3Result.Success) {
+		throw ('Stopping because Module 3 failed: {0}' -f ($module3Result.Errors -join '; '))
+	}
+	Write-LogUtc -Message 'Closure guard retained: DISM/SFC will run only at script end in Module 7.'
+
+	$module4Result = Invoke-Module4DriverManagement -HardwareProfile $script:HardwareProfile -BackupRootPath $script:BackupRootPath -PreviewDriversToRemove:$PreviewDriversToRemove -RemoveDuplicateDrivers:$RemoveDuplicateDrivers
+	$script:AllModuleResults += $module4Result
+	if (-not $module4Result.Success) {
+		throw ('Stopping because Module 4 failed: {0}' -f ($module4Result.Errors -join '; '))
+	}
+	Write-LogUtc -Message 'Module 4 finished. DISM/SFC still deferred to final closure module.'
+}
+catch {
+	Write-Error $_.Exception.Message
+	if ($script:LogFilePath) {
+		Write-LogUtc -Message ('Fatal orchestration error in modules 1-4: {0}' -f $_.Exception.Message) -Level 'ERROR'
+	}
+	$script:PreClosureFatalMessage = $_.Exception.Message
+}
+
+#endregion Orchestration (Chunks 1-4)
+
+#region Module 5 Helpers
+
+function Get-OptionalServicesMap {
+<#
+.SYNOPSIS
+Returns embedded optional-services allowlist.
+
+.DESCRIPTION
+Defines services eligible for startup optimization. Services not in this map are never modified.
+
+.EXAMPLE
+$map = Get-OptionalServicesMap
+#>
+	[CmdletBinding()]
+	param()
+
+	return @{
+		'DiagTrack'   = 'Manual'
+		'WerSvc'      = 'Manual'
+		'MapsBroker'  = 'Manual'
+		'PcaSvc'      = 'Manual'
+		'RemoteRegistry' = 'Manual'
+		'WSearch'     = 'Automatic'
+	}
+}
+
+function Get-ServiceStartModeMap {
+<#
+.SYNOPSIS
+Builds current service startup mode map.
+
+.DESCRIPTION
+Uses CIM service metadata to capture startup mode for rollback/reporting.
+
+.EXAMPLE
+$modes = Get-ServiceStartModeMap
+#>
+	[CmdletBinding()]
+	param()
+
+	$map = @{}
+	$services = Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
+		Select-Object Name, StartMode, State
+
+	foreach ($svc in $services) {
+		$map[$svc.Name] = [pscustomobject]@{
+			StartMode = $svc.StartMode
+			State     = $svc.State
+		}
+	}
+
+	return $map
+}
+
+function Test-ServiceSafeToModify {
+<#
+.SYNOPSIS
+Validates that service is safe to modify.
+
+.DESCRIPTION
+Prevents changing startup type for services that are dependencies of currently running services.
+
+.PARAMETER Name
+Service name.
+
+.EXAMPLE
+$ok = Test-ServiceSafeToModify -Name 'DiagTrack'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Name
+	)
+
+	try {
+		$runningDependents = Get-Service | Where-Object {
+			$_.Status -eq 'Running' -and ($_.ServicesDependedOn | Where-Object { $_.Name -eq $Name })
+		}
+		return ($runningDependents.Count -eq 0)
+	}
+	catch {
+		Write-LogUtc -Message ("Dependency inspection failed for service {0}: {1}" -f $Name, $_.Exception.Message) -Level 'WARN'
+		return $false
+	}
+}
+
+function Convert-ToServiceStartupType {
+<#
+.SYNOPSIS
+Converts startup mode text to Set-Service accepted values.
+
+.PARAMETER StartMode
+Win32_Service StartMode text.
+
+.EXAMPLE
+$type = Convert-ToServiceStartupType -StartMode 'Auto'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$StartMode
+	)
+
+	switch ($StartMode.ToLowerInvariant()) {
+		'auto'      { return 'Automatic' }
+		'automatic' { return 'Automatic' }
+		'manual'    { return 'Manual' }
+		'disabled'  { return 'Disabled' }
+		default     { return 'Manual' }
+	}
+}
+
+function Set-ServiceStartupTypeSafe {
+<#
+.SYNOPSIS
+Sets service startup type with safety checks.
+
+.DESCRIPTION
+Applies startup change only when service is allowlisted, safe by dependency check, and confirmed.
+
+.PARAMETER ServiceName
+Service short name.
+
+.PARAMETER TargetStartupType
+Target startup type for Set-Service.
+
+.PARAMETER BaselineMap
+Original service startup map used for rollback capture.
+
+.EXAMPLE
+Set-ServiceStartupTypeSafe -ServiceName 'DiagTrack' -TargetStartupType 'Manual' -BaselineMap $baseline
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$ServiceName,
+
+		[Parameter(Mandatory = $true)]
+		[string]$TargetStartupType,
+
+		[Parameter(Mandatory = $true)]
+		[hashtable]$BaselineMap
+	)
+
+	if (-not (Test-ServiceSafeToModify -Name $ServiceName)) {
+		Write-LogUtc -Message ("Service startup change skipped due to dependency safety gate: {0}" -f $ServiceName) -Level 'WARN'
+		return [pscustomobject]@{ Changed = $false; Reason = 'Dependency safety gate'; Service = $ServiceName }
+	}
+
+	$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+	if (-not $service) {
+		Write-LogUtc -Message ("Service not found; skipped: {0}" -f $ServiceName) -Level 'WARN'
+		return [pscustomobject]@{ Changed = $false; Reason = 'Service missing'; Service = $ServiceName }
+	}
+
+	$currentStartMode = 'Unknown'
+	if ($BaselineMap.ContainsKey($ServiceName)) {
+		$currentStartMode = [string]$BaselineMap[$ServiceName].StartMode
+	}
+
+	if ((Convert-ToServiceStartupType -StartMode $currentStartMode) -eq $TargetStartupType) {
+		Write-LogUtc -Message ("Service startup already set; skipped: {0}={1}" -f $ServiceName, $TargetStartupType)
+		return [pscustomobject]@{ Changed = $false; Reason = 'Already set'; Service = $ServiceName }
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would set service startup: {0} -> {1}" -f $ServiceName, $TargetStartupType) -Level 'WARN'
+		return [pscustomobject]@{ Changed = $false; Reason = 'DryRun'; Service = $ServiceName }
+	}
+
+	if ($PSCmdlet.ShouldProcess($ServiceName, ("Set startup type to {0}" -f $TargetStartupType))) {
+		Set-Service -Name $ServiceName -StartupType $TargetStartupType -ErrorAction Stop
+		Write-LogUtc -Message ("Service startup changed: {0} {1} -> {2}" -f $ServiceName, $currentStartMode, $TargetStartupType)
+		return [pscustomobject]@{ Changed = $true; Reason = 'Updated'; Service = $ServiceName; Old = $currentStartMode; New = $TargetStartupType }
+	}
+
+	return [pscustomobject]@{ Changed = $false; Reason = 'Not approved'; Service = $ServiceName }
+}
+
+function Get-StartupItems {
+<#
+.SYNOPSIS
+Gets startup entries from registry and scheduled tasks.
+
+.DESCRIPTION
+Builds startup items for preview and optional disable workflow.
+
+.EXAMPLE
+$items = Get-StartupItems
+#>
+	[CmdletBinding()]
+	param()
+
+	$items = @()
+
+	$runPaths = @(
+		'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+		'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+	)
+
+	foreach ($path in $runPaths) {
+		if (-not (Test-Path -Path $path)) { continue }
+		$props = Get-ItemProperty -Path $path
+		foreach ($p in $props.PSObject.Properties) {
+			if ($p.Name -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { continue }
+			$items += [pscustomobject]@{
+				Type     = 'RegistryRun'
+				Name     = $p.Name
+				Value    = [string]$p.Value
+				Location = $path
+			}
+		}
+	}
+
+	$tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+		$_.State -ne 'Disabled' -and $_.TaskPath -notlike '\\Microsoft\\Windows\\*'
+	}
+
+	foreach ($t in $tasks) {
+		$items += [pscustomobject]@{
+			Type     = 'ScheduledTask'
+			Name     = $t.TaskName
+			Value    = $t.State
+			Location = $t.TaskPath
+		}
+	}
+
+	return $items
+}
+
+function Disable-StartupItemSafe {
+<#
+.SYNOPSIS
+Disables startup item without deleting it.
+
+.DESCRIPTION
+For registry Run items, prefixes value with "DISABLED_BY_OPTIMIZEWINDOWS10::" for reversible disable.
+For scheduled tasks, disables task via Disable-ScheduledTask.
+
+.PARAMETER Item
+Startup item object from Get-StartupItems.
+
+.EXAMPLE
+Disable-StartupItemSafe -Item $item
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$Item
+	)
+
+	$prefix = 'DISABLED_BY_OPTIMIZEWINDOWS10::'
+
+	if ($Item.Type -eq 'RegistryRun') {
+		if ($Item.Value -like "$prefix*") {
+			Write-LogUtc -Message ("Startup registry item already disabled: {0}" -f $Item.Name)
+			return [pscustomobject]@{ Changed = $false; Reason = 'Already disabled'; Item = $Item.Name }
+		}
+
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would disable startup registry item: {0} ({1})" -f $Item.Name, $Item.Location) -Level 'WARN'
+			return [pscustomobject]@{ Changed = $false; Reason = 'DryRun'; Item = $Item.Name }
+		}
+
+		if ($PSCmdlet.ShouldProcess($Item.Name, 'Disable startup registry item')) {
+			Set-ItemProperty -Path $Item.Location -Name $Item.Name -Value ("{0}{1}" -f $prefix, $Item.Value) -ErrorAction Stop
+			Write-LogUtc -Message ("Startup registry item disabled: {0} at {1}" -f $Item.Name, $Item.Location)
+			return [pscustomobject]@{ Changed = $true; Reason = 'Disabled'; Item = $Item.Name }
+		}
+	}
+
+	if ($Item.Type -eq 'ScheduledTask') {
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would disable scheduled task startup item: {0} ({1})" -f $Item.Name, $Item.Location) -Level 'WARN'
+			return [pscustomobject]@{ Changed = $false; Reason = 'DryRun'; Item = $Item.Name }
+		}
+
+		if ($PSCmdlet.ShouldProcess($Item.Name, 'Disable scheduled task')) {
+			Disable-ScheduledTask -TaskName $Item.Name -TaskPath $Item.Location -ErrorAction Stop | Out-Null
+			Write-LogUtc -Message ("Scheduled task disabled: {0}{1}" -f $Item.Location, $Item.Name)
+			return [pscustomobject]@{ Changed = $true; Reason = 'Disabled'; Item = $Item.Name }
+		}
+	}
+
+	return [pscustomobject]@{ Changed = $false; Reason = 'Unsupported type'; Item = $Item.Name }
+}
+
+function Select-StartupItemsByAllowList {
+<#
+.SYNOPSIS
+Selects startup items using exact-name or regex allowlist matching.
+
+.PARAMETER StartupItems
+Startup item objects from Get-StartupItems.
+
+.PARAMETER AllowList
+Allowlist entries.
+
+.PARAMETER AsRegex
+Treat allowlist entries as regex patterns.
+
+.EXAMPLE
+$targets = Select-StartupItemsByAllowList -StartupItems $items -AllowList $StartupItemAllowList -AsRegex:$StartupItemAllowListIsRegex
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[array]$StartupItems,
+
+		[Parameter(Mandatory = $true)]
+		[string[]]$AllowList,
+
+		[switch]$AsRegex
+	)
+
+	if ($AllowList.Count -eq 0) {
+		return @()
+	}
+
+	if ($AsRegex) {
+		$patterns = @()
+		foreach ($entry in $AllowList) {
+			try {
+				$patterns += [regex]::new($entry, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+			}
+			catch {
+				Write-LogUtc -Message ("Invalid startup allowlist regex skipped: {0}; Reason: {1}" -f $entry, $_.Exception.Message) -Level 'WARN'
+			}
+		}
+
+		return @($StartupItems | Where-Object {
+			$itemName = [string]$_.Name
+			$matched = $false
+			foreach ($rx in $patterns) {
+				if ($rx.IsMatch($itemName)) {
+					$matched = $true
+					break
+				}
+			}
+			$matched
+		})
+	}
+
+	$set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+	foreach ($entry in $AllowList) {
+		[void]$set.Add($entry)
+	}
+
+	return @($StartupItems | Where-Object { $set.Contains([string]$_.Name) })
+}
+
+#endregion Module 5 Helpers
+
+#region Module 5
+
+function Invoke-Module5ServicesAndStartupOptimization {
+<#
+.SYNOPSIS
+Runs Module 5 service and startup optimization.
+
+.DESCRIPTION
+Applies allowlist-only, dependency-safe service startup tuning and optional startup item disabling.
+Never deletes services or startup entries and records baseline rollback metadata.
+
+.PARAMETER HardwareProfile
+Hardware profile from Module 1.
+
+.EXAMPLE
+$module5 = Invoke-Module5ServicesAndStartupOptimization -HardwareProfile $script:HardwareProfile
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module5-ServicesAndStartupOptimization'
+
+	try {
+		$allowMap = Get-OptionalServicesMap
+		$baseline = Get-ServiceStartModeMap
+
+		$servicePreview = @()
+		foreach ($serviceName in $allowMap.Keys) {
+			$oldMode = if ($baseline.ContainsKey($serviceName)) { [string]$baseline[$serviceName].StartMode } else { 'Missing' }
+			$servicePreview += [pscustomobject]@{
+				ServiceName = $serviceName
+				Current     = $oldMode
+				Target      = [string]$allowMap[$serviceName]
+				CanModify   = (Test-ServiceSafeToModify -Name $serviceName)
+			}
+		}
+
+		$startupItems = Get-StartupItems
+		$startupPreview = $startupItems | Select-Object Type, Name, Location
+
+		Write-Host ($servicePreview | Format-Table -AutoSize | Out-String)
+		Write-Host ($startupPreview | Format-Table -AutoSize | Out-String)
+		Write-LogUtc -Message "Module 5 preview generated for services and startup items."
+
+		$proceed = $true
+		if (-not $AutoApprove) {
+			$proceed = (Read-Host 'Apply Module 5 service/startup optimizations? Type Y to continue') -match '^(Y|y)$'
+		}
+
+		if (-not $proceed) {
+			$result.Warnings += 'Module 5 changes skipped by operator.'
+			Write-LogUtc -Message 'Module 5 changes skipped by operator.' -Level 'WARN'
+			$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+			return $result
+		}
+
+		foreach ($svc in $servicePreview) {
+			if ($svc.Current -eq 'Missing') {
+				$result.Warnings += ("Service missing, skipped: {0}" -f $svc.ServiceName)
+				continue
+			}
+
+			$setResult = Set-ServiceStartupTypeSafe -ServiceName $svc.ServiceName -TargetStartupType $svc.Target -BaselineMap $baseline
+			if ($setResult.Changed) {
+				$result.ChangesApplied += ("Service startup updated: {0} -> {1}" -f $svc.ServiceName, $svc.Target)
+				$result.RollbackSteps += ("Restore service {0} startup mode to {1}" -f $svc.ServiceName, $svc.Current)
+			}
+			elseif ($setResult.Reason -ne 'Already set') {
+				$result.Warnings += ("Service unchanged: {0} ({1})" -f $svc.ServiceName, $setResult.Reason)
+			}
+		}
+
+		if (-not $OptimizeStartupItems) {
+			Write-LogUtc -Message 'Startup item optimization skipped: -OptimizeStartupItems not specified.' -Level 'WARN'
+			$result.Warnings += 'Startup item optimization skipped because -OptimizeStartupItems was not set.'
+		}
+		else {
+			$startupTargets = @()
+			if ($StartupItemAllowList.Count -eq 0) {
+				Write-LogUtc -Message 'Startup item optimization requested but StartupItemAllowList is empty; no startup items will be modified.' -Level 'WARN'
+				$result.Warnings += 'No startup items modified because StartupItemAllowList is empty.'
+			}
+			else {
+				$startupTargets = Select-StartupItemsByAllowList -StartupItems $startupItems -AllowList $StartupItemAllowList -AsRegex:$StartupItemAllowListIsRegex
+				Write-LogUtc -Message ("Startup item allowlist matched {0} item(s); RegexMode={1}." -f $startupTargets.Count, $StartupItemAllowListIsRegex.IsPresent)
+			}
+
+			foreach ($item in $startupTargets) {
+				$disableResult = Disable-StartupItemSafe -Item $item
+				if ($disableResult.Changed) {
+					$result.ChangesApplied += ("Startup item disabled: {0} ({1})" -f $item.Name, $item.Type)
+					if ($item.Type -eq 'RegistryRun') {
+						$result.RollbackSteps += ("Remove DISABLED_BY_OPTIMIZEWINDOWS10:: prefix from startup item {0} at {1}" -f $item.Name, $item.Location)
+					}
+					elseif ($item.Type -eq 'ScheduledTask') {
+						$result.RollbackSteps += ("Re-enable scheduled task {0}{1}" -f $item.Location, $item.Name)
+					}
+				}
+			}
+		}
+
+		Write-LogUtc -Message 'Module 5 completed successfully.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 5 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 5
+
+#region Orchestration (Chunk 5)
+
+try {
+	if ($script:PreClosureFatalMessage) {
+		Write-LogUtc -Message ('Skipping module 5 because a prior orchestration failure occurred: {0}' -f $script:PreClosureFatalMessage) -Level 'WARN'
+	}
+	else {
+		if (-not $script:HardwareProfile) {
+			throw 'Module 1 output missing. HardwareProfile was not initialized.'
+		}
+
+		$module5Result = Invoke-Module5ServicesAndStartupOptimization -HardwareProfile $script:HardwareProfile
+		$script:AllModuleResults += $module5Result
+
+		if (-not $module5Result.Success) {
+			throw ('Stopping because Module 5 failed: {0}' -f ($module5Result.Errors -join '; '))
+		}
+
+		Write-LogUtc -Message 'Module 5 finished. DISM/SFC remain deferred to Module 7 final closure.'
+	}
+}
+catch {
+	Write-Error $_.Exception.Message
+	if ($script:LogFilePath) {
+		Write-LogUtc -Message ('Fatal orchestration error in module 5: {0}' -f $_.Exception.Message) -Level 'ERROR'
+	}
+	$script:PreClosureFatalMessage = $_.Exception.Message
+}
+
+#endregion Orchestration (Chunk 5)
+
+#region Module 6 Helpers
+
+function Get-ActivePowerScheme {
+<#
+.SYNOPSIS
+Gets active power scheme GUID and name.
+
+.DESCRIPTION
+Parses powercfg /getactivescheme output.
+
+.EXAMPLE
+$active = Get-ActivePowerScheme
+#>
+	[CmdletBinding()]
+	param()
+
+	$out = & powercfg.exe /getactivescheme 2>&1
+	$text = ($out -join ' ')
+	if ($text -match '([A-Fa-f0-9\-]{36})\s*\(([^\)]+)\)') {
+		return [pscustomobject]@{ Guid = $matches[1]; Name = $matches[2] }
+	}
+
+	return [pscustomobject]@{ Guid = $null; Name = 'Unknown' }
+}
+
+function Get-OptimizePowerPlanGuid {
+	[CmdletBinding()]
+	param()
+
+	$out = & powercfg.exe /l 2>&1
+	foreach ($line in $out) {
+		if ($line -match 'Power Scheme GUID:\s*([A-Fa-f0-9\-]{36})\s*\((Optimize-Windows10-Performance)\)') {
+			return $matches[1]
+		}
+	}
+
+	return $null
+}
+
+function Ensure-OptimizePowerPlan {
+<#
+.SYNOPSIS
+Creates Optimize-Windows10-Performance power plan if missing.
+
+.DESCRIPTION
+Duplicates High performance plan and renames it. Does not set active plan.
+
+.EXAMPLE
+$guid = Ensure-OptimizePowerPlan
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param()
+
+	$existing = Get-OptimizePowerPlanGuid
+	if ($existing) {
+		Write-LogUtc -Message ("Optimize power plan already exists: {0}" -f $existing)
+		return $existing
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message '[DryRun] Would create Optimize-Windows10-Performance power plan.' -Level 'WARN'
+		return 'DRYRUN-PLAN-GUID'
+	}
+
+	if ($PSCmdlet.ShouldProcess('Power plan catalog', 'Create Optimize-Windows10-Performance plan')) {
+		$dup = & powercfg.exe -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1
+		$dupText = ($dup -join ' ')
+		if ($dupText -notmatch '([A-Fa-f0-9\-]{36})') {
+			throw 'Failed to duplicate High performance power plan.'
+		}
+
+		$newGuid = $matches[1]
+		& powercfg.exe -changename $newGuid 'Optimize-Windows10-Performance' | Out-Null
+		Write-LogUtc -Message ("Created Optimize-Windows10-Performance power plan: {0}" -f $newGuid)
+		return $newGuid
+	}
+
+	return $null
+}
+
+function Get-PagefileRecommendation {
+<#
+.SYNOPSIS
+Builds pagefile recommendation based on RAM and storage type.
+
+.DESCRIPTION
+Recommends system-managed on SSD. On HDD, recommends bounded range of 1x-1.5x RAM.
+
+.PARAMETER HardwareProfile
+Hardware profile from Module 1.
+
+.EXAMPLE
+$rec = Get-PagefileRecommendation -HardwareProfile $script:HardwareProfile
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile
+	)
+
+	$systemDrive = [System.Environment]::GetEnvironmentVariable('SystemDrive')
+	$systemType = 'HDD'
+	if ($HardwareProfile.StorageType.ContainsKey($systemDrive)) {
+		$systemType = [string]$HardwareProfile.StorageType[$systemDrive]
+	}
+
+	$ramGb = [double]$HardwareProfile.TotalRAMgb
+	$ramMb = [math]::Round($ramGb * 1024)
+
+	if ($systemType -eq 'SSD') {
+		return [pscustomobject]@{
+			StorageType = 'SSD'
+			Mode        = 'SystemManaged'
+			InitialMB   = $null
+			MaximumMB   = $null
+			Note        = 'System-managed pagefile recommended on SSD.'
+		}
+	}
+
+	$initial = [int]$ramMb
+	$maximum = [int]([math]::Round($ramMb * 1.5))
+
+	return [pscustomobject]@{
+		StorageType = 'HDD'
+		Mode        = 'Custom'
+		InitialMB   = $initial
+		MaximumMB   = $maximum
+		Note        = 'For HDD, use bounded pagefile between 1x and 1.5x RAM.'
+	}
+}
+
+function Set-PagefileConfiguration {
+<#
+.SYNOPSIS
+Applies pagefile setting recommendation.
+
+.DESCRIPTION
+Switches to system-managed or custom pagefile based on recommendation.
+
+.PARAMETER Recommendation
+Recommendation object from Get-PagefileRecommendation.
+
+.EXAMPLE
+Set-PagefileConfiguration -Recommendation $rec
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$Recommendation
+	)
+
+	$computer = Get-CimInstance -ClassName Win32_ComputerSystem
+	$current = Get-CimInstance -ClassName Win32_PageFileSetting -ErrorAction SilentlyContinue
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would apply pagefile mode: {0}" -f $Recommendation.Mode) -Level 'WARN'
+		return
+	}
+
+	if ($Recommendation.Mode -eq 'SystemManaged') {
+		if ($PSCmdlet.ShouldProcess('Pagefile', 'Enable automatic managed pagefile')) {
+			Set-CimInstance -InputObject $computer -Property @{ AutomaticManagedPagefile = $true } | Out-Null
+			Write-LogUtc -Message 'Set pagefile mode to system-managed.'
+		}
+		return
+	}
+
+	if ($PSCmdlet.ShouldProcess('Pagefile', 'Set custom pagefile size')) {
+		Set-CimInstance -InputObject $computer -Property @{ AutomaticManagedPagefile = $false } | Out-Null
+
+		$pagePath = "$($env:SystemDrive)\\pagefile.sys"
+		if ($current) {
+			foreach ($pf in $current) {
+				Remove-CimInstance -InputObject $pf -ErrorAction SilentlyContinue
+			}
+		}
+
+		New-CimInstance -ClassName Win32_PageFileSetting -Property @{
+			Name        = $pagePath
+			InitialSize = [int]$Recommendation.InitialMB
+			MaximumSize = [int]$Recommendation.MaximumMB
+		} | Out-Null
+
+		Write-LogUtc -Message ("Set custom pagefile: InitialMB={0}, MaximumMB={1}" -f $Recommendation.InitialMB, $Recommendation.MaximumMB)
+	}
+}
+
+function Set-VisualEffectsPresetSafe {
+<#
+.SYNOPSIS
+Applies visual effects preset.
+
+.DESCRIPTION
+Balanced leaves defaults untouched. Performance and MaxPerformance apply VisualFXSetting values.
+
+.PARAMETER Preset
+Balanced | Performance | MaxPerformance.
+
+.EXAMPLE
+Set-VisualEffectsPresetSafe -Preset $VisualEffectsPreset
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[ValidateSet('Balanced', 'Performance', 'MaxPerformance')]
+		[string]$Preset
+	)
+
+	if ($Preset -eq 'Balanced') {
+		Write-LogUtc -Message 'Balanced visual effects preset selected; no forced change applied.'
+		return
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would apply visual effects preset: {0}" -f $Preset) -Level 'WARN'
+		return
+	}
+
+	$targetValue = switch ($Preset) {
+		'Performance' { 2 }
+		'MaxPerformance' { 3 }
+		default { $null }
+	}
+
+	if ($null -eq $targetValue) {
+		Write-LogUtc -Message ("Visual effects preset unresolved; skipping: {0}" -f $Preset) -Level 'WARN'
+		return
+	}
+
+	if ($PSCmdlet.ShouldProcess('HKCU VisualEffects', ("Apply visual effects preset: {0}" -f $Preset))) {
+		New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
+		New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -PropertyType DWord -Value $targetValue -Force | Out-Null
+		Write-LogUtc -Message ("Visual effects preset applied: {0}" -f $Preset)
+	}
+}
+
+function Set-SysMainByStorageType {
+<#
+.SYNOPSIS
+Configures SysMain based on storage type.
+
+.DESCRIPTION
+Disable only on SSD and only with confirmation. Keep enabled on HDD.
+
+.PARAMETER HardwareProfile
+Hardware profile object.
+
+.EXAMPLE
+Set-SysMainByStorageType -HardwareProfile $script:HardwareProfile
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile
+	)
+
+	$systemDrive = [System.Environment]::GetEnvironmentVariable('SystemDrive')
+	$storageType = if ($HardwareProfile.StorageType.ContainsKey($systemDrive)) { [string]$HardwareProfile.StorageType[$systemDrive] } else { 'HDD' }
+
+	$svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
+	if (-not $svc) {
+		Write-LogUtc -Message 'SysMain service not found; skipping.' -Level 'WARN'
+		return [pscustomobject]@{ Changed = $false; Reason = 'Missing' }
+	}
+
+	if ($storageType -eq 'HDD') {
+		Write-LogUtc -Message 'Storage is HDD; SysMain remains enabled by policy.'
+		return [pscustomobject]@{ Changed = $false; Reason = 'HDD keep enabled' }
+	}
+
+	$confirm = Request-StandardConfirmation -Message 'Storage detected as SSD. Disable SysMain?'
+	if (-not $confirm) {
+		Write-LogUtc -Message 'SysMain disable declined by operator.'
+		return [pscustomobject]@{ Changed = $false; Reason = 'Declined' }
+	}
+
+	if ($DryRun) {
+		Write-LogUtc -Message '[DryRun] Would disable SysMain service on SSD.' -Level 'WARN'
+		return [pscustomobject]@{ Changed = $false; Reason = 'DryRun' }
+	}
+
+	if ($PSCmdlet.ShouldProcess('SysMain', 'Disable service for SSD optimization')) {
+		Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue
+		Set-Service -Name 'SysMain' -StartupType Disabled -ErrorAction Stop
+		Write-LogUtc -Message 'SysMain disabled for SSD profile.'
+		return [pscustomobject]@{ Changed = $true; Reason = 'DisabledOnSSD' }
+	}
+
+	return [pscustomobject]@{ Changed = $false; Reason = 'Not approved' }
+}
+
+function Set-HeavyTasksScheduleWindow {
+<#
+.SYNOPSIS
+Reschedules selected heavy tasks to 02:00-04:00.
+
+.DESCRIPTION
+Updates start boundaries for known heavy tasks when operator confirms.
+
+.EXAMPLE
+Set-HeavyTasksScheduleWindow
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param()
+
+	$targets = @(
+		@{ TaskPath='\\Microsoft\\Windows\\Defrag\\'; TaskName='ScheduledDefrag'; NewTime='02:30' },
+		@{ TaskPath='\\Microsoft\\Windows\\Customer Experience Improvement Program\\'; TaskName='Consolidator'; NewTime='03:00' }
+	)
+
+	$confirm = Request-StandardConfirmation -Message 'Reschedule heavy maintenance tasks into 02:00-04:00 window?'
+	if (-not $confirm) {
+		Write-LogUtc -Message 'Heavy task reschedule declined by operator.'
+		return @()
+	}
+
+	$changes = @()
+	foreach ($t in $targets) {
+		try {
+			$task = Get-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction SilentlyContinue
+			if (-not $task) { continue }
+			$qualifiedTaskName = ('{0}{1}' -f $t.TaskPath, $t.TaskName)
+
+			if ($DryRun) {
+				Write-LogUtc -Message ("[DryRun] Would reschedule task {0} to {1} via schtasks /Change." -f $qualifiedTaskName, $t.NewTime) -Level 'WARN'
+				$changes += ("{0} -> {1}" -f $qualifiedTaskName, $t.NewTime)
+				continue
+			}
+
+			if ($PSCmdlet.ShouldProcess($qualifiedTaskName, ("Set task start time to {0} via schtasks /Change" -f $t.NewTime))) {
+				$changeOut = & schtasks.exe /Change /TN $qualifiedTaskName /ST $t.NewTime 2>&1
+				if ($LASTEXITCODE -ne 0) {
+					Write-LogUtc -Message ("Task schedule change skipped for {0}. Output: {1}" -f $qualifiedTaskName, ($changeOut -join ' ')) -Level 'WARN'
+					continue
+				}
+
+				Write-LogUtc -Message ("Rescheduled task {0} to {1} via schtasks /Change." -f $qualifiedTaskName, $t.NewTime)
+				$changes += ("{0} -> {1}" -f $qualifiedTaskName, $t.NewTime)
+			}
+		}
+		catch {
+			Write-LogUtc -Message ("Failed to reschedule task {0}{1}: {2}" -f $t.TaskPath, $t.TaskName, $_.Exception.Message) -Level 'WARN'
+		}
+	}
+
+	return $changes
+}
+
+#endregion Module 6 Helpers
+
+#region Module 6
+
+function Invoke-Module6PerformanceTuning {
+<#
+.SYNOPSIS
+Runs Module 6 performance tuning.
+
+.DESCRIPTION
+Applies hardware-aware tuning for power plan, pagefile, visual effects, SysMain, and heavy task scheduling.
+Each action is independently confirmable and logged.
+
+.PARAMETER HardwareProfile
+Hardware profile from Module 1.
+
+.PARAMETER VisualEffectsPreset
+Balanced | Performance | MaxPerformance.
+
+.EXAMPLE
+$module6 = Invoke-Module6PerformanceTuning -HardwareProfile $script:HardwareProfile -VisualEffectsPreset $VisualEffectsPreset
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$HardwareProfile,
+
+		[Parameter(Mandatory = $true)]
+		[ValidateSet('Balanced', 'Performance', 'MaxPerformance')]
+		[string]$VisualEffectsPreset
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module6-PerformanceTuning'
+
+	try {
+		$activeBefore = Get-ActivePowerScheme
+		$result.RollbackSteps += ("Restore active power scheme to {0} ({1})" -f $activeBefore.Name, $activeBefore.Guid)
+
+		$createPlan = Request-StandardConfirmation -Message 'Create Optimize-Windows10-Performance power plan?'
+		$planGuid = $null
+		if ($createPlan) {
+			$planGuid = Ensure-OptimizePowerPlan
+			if ($planGuid) {
+				$result.ChangesApplied += ("Optimize power plan available: {0}" -f $planGuid)
+			}
+		}
+
+		if ($planGuid -and $planGuid -ne 'DRYRUN-PLAN-GUID') {
+			$switchPlan = Request-StandardConfirmation -Message 'Switch active power plan to Optimize-Windows10-Performance?'
+			if ($switchPlan) {
+				if ($DryRun) {
+					Write-LogUtc -Message ("[DryRun] Would set active power plan: {0}" -f $planGuid) -Level 'WARN'
+				}
+				elseif ($PSCmdlet.ShouldProcess($planGuid, 'Set active power scheme')) {
+					& powercfg.exe /setactive $planGuid | Out-Null
+					Write-LogUtc -Message ("Active power scheme set to: {0}" -f $planGuid)
+					$result.ChangesApplied += 'Active power scheme updated.'
+				}
+			}
+		}
+
+		$pageRec = Get-PagefileRecommendation -HardwareProfile $HardwareProfile
+		Write-Host ("Pagefile recommendation: Mode={0}; InitialMB={1}; MaximumMB={2}; Note={3}" -f $pageRec.Mode, $pageRec.InitialMB, $pageRec.MaximumMB, $pageRec.Note)
+		$pageApply = Request-StandardConfirmation -Message 'Apply pagefile recommendation?'
+		if ($pageApply) {
+			Set-PagefileConfiguration -Recommendation $pageRec
+			$result.ChangesApplied += ("Pagefile configuration applied: {0}" -f $pageRec.Mode)
+			$result.RollbackSteps += 'Restore previous pagefile settings from baseline snapshots.'
+		}
+
+		Set-VisualEffectsPresetSafe -Preset $VisualEffectsPreset
+		if ($VisualEffectsPreset -ne 'Balanced') {
+			$result.ChangesApplied += ("Visual effects preset applied: {0}" -f $VisualEffectsPreset)
+			$result.RollbackSteps += 'Set visual effects back to Windows default (Balanced).'
+		}
+
+		$sysMainResult = Set-SysMainByStorageType -HardwareProfile $HardwareProfile
+		if ($sysMainResult.Changed) {
+			$result.ChangesApplied += 'SysMain disabled for SSD profile.'
+			$result.RollbackSteps += 'Re-enable SysMain and set startup type to Automatic.'
+		}
+
+		$taskChanges = Set-HeavyTasksScheduleWindow
+		foreach ($c in $taskChanges) {
+			$result.ChangesApplied += ("Task rescheduled: {0}" -f $c)
+			$result.RollbackSteps += ("Restore original schedule for task: {0}" -f $c)
+		}
+
+		Write-LogUtc -Message 'Module 6 completed successfully.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 6 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 6
+
+#region Orchestration (Chunk 6)
+
+try {
+	if ($script:PreClosureFatalMessage) {
+		Write-LogUtc -Message ('Skipping module 6 because a prior orchestration failure occurred: {0}' -f $script:PreClosureFatalMessage) -Level 'WARN'
+	}
+	else {
+		if (-not $script:HardwareProfile) {
+			throw 'Module 1 output missing. HardwareProfile was not initialized.'
+		}
+
+		$module6Result = Invoke-Module6PerformanceTuning -HardwareProfile $script:HardwareProfile -VisualEffectsPreset $VisualEffectsPreset
+		$script:AllModuleResults += $module6Result
+
+		if (-not $module6Result.Success) {
+			throw ('Stopping because Module 6 failed: {0}' -f ($module6Result.Errors -join '; '))
+		}
+
+		Write-LogUtc -Message 'Module 6 finished. DISM/SFC still locked to Module 7 as final closure stage.'
+	}
+}
+catch {
+	Write-Error $_.Exception.Message
+	if ($script:LogFilePath) {
+		Write-LogUtc -Message ('Fatal orchestration error in module 6: {0}' -f $_.Exception.Message) -Level 'ERROR'
+	}
+	$script:PreClosureFatalMessage = $_.Exception.Message
+}
+
+#endregion Orchestration (Chunk 6)
+
+#region Module 7 Helpers
+
+function Invoke-LoggedExternalCommand {
+<#
+.SYNOPSIS
+Runs external command and logs full output to timestamped file.
+
+.DESCRIPTION
+Executes command line tools, captures stdout/stderr, writes output to a dedicated log file,
+and returns exit code and output path metadata.
+
+.PARAMETER FilePath
+Executable path.
+
+.PARAMETER Arguments
+Argument array.
+
+.PARAMETER Label
+Label used in log file naming.
+
+.EXAMPLE
+$run = Invoke-LoggedExternalCommand -FilePath 'dism.exe' -Arguments @('/Online','/Cleanup-Image','/ScanHealth') -Label 'DISM_ScanHealth'
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$FilePath,
+
+		[Parameter(Mandatory = $true)]
+		[string[]]$Arguments,
+
+		[Parameter(Mandatory = $true)]
+		[string]$Label
+	)
+
+	$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+	$outputPath = Join-Path -Path $script:ResolvedLogPath -ChildPath ("{0}_{1}.log" -f $Label, $stamp)
+
+	if ($DryRun) {
+		Write-LogUtc -Message ("[DryRun] Would execute: {0} {1}" -f $FilePath, ($Arguments -join ' ')) -Level 'WARN'
+		return [pscustomobject]@{
+			Command    = $FilePath
+			Arguments  = $Arguments
+			ExitCode   = 0
+			OutputPath = $outputPath
+			OutputText = '[DryRun] No command executed.'
+		}
+	}
+
+	$output = & $FilePath @Arguments 2>&1
+	$exitCode = $LASTEXITCODE
+	$outputText = ($output | Out-String)
+	Set-Content -Path $outputPath -Value $outputText -Encoding UTF8
+
+	Write-LogUtc -Message ("Command executed: {0} {1}; ExitCode={2}; Output={3}" -f $FilePath, ($Arguments -join ' '), $exitCode, $outputPath)
+
+	return [pscustomobject]@{
+		Command    = $FilePath
+		Arguments  = $Arguments
+		ExitCode   = $exitCode
+		OutputPath = $outputPath
+		OutputText = $outputText
+	}
+}
+
+function Test-DismScanHealthIndicatesRepair {
+<#
+.SYNOPSIS
+Determines whether DISM ScanHealth indicates corruption/issues.
+
+.PARAMETER ScanOutputText
+ScanHealth output text.
+
+.EXAMPLE
+$needs = Test-DismScanHealthIndicatesRepair -ScanOutputText $scan.OutputText
+#>
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$ScanOutputText
+	)
+
+	if ($ScanOutputText -match 'No component store corruption detected') { return $false }
+	if ($ScanOutputText -match 'No corruption detected') { return $false }
+	if ($ScanOutputText -match 'The component store is repairable') { return $true }
+	if ($ScanOutputText -match 'corruption') { return $true }
+
+	# Conservative default: if uncertain, treat as issue detected to preserve safety.
+	return $true
+}
+
+#endregion Module 7 Helpers
+
+#region Module 7
+
+function Invoke-Module7SystemValidationAndRepair {
+<#
+.SYNOPSIS
+Runs Module 7 system validation and repair sequence.
+
+.DESCRIPTION
+Runs fixed end-of-operations sequence:
+1) DISM ScanHealth
+2) Conditional DISM RestoreHealth (with one retry on failure)
+3) SFC /scannow
+4) DISM AnalyzeComponentStore
+
+This module is closure-stage validation and must execute after modules 1-6 complete.
+
+.EXAMPLE
+$module7 = Invoke-Module7SystemValidationAndRepair
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param()
+
+	$result = New-ModuleResult -ModuleName 'Module7-SystemValidationAndRepair'
+
+	try {
+		Write-LogUtc -Message 'Module 7 started as closure stage. DISM/SFC fixed sequence begins.'
+
+		$scan = Invoke-LoggedExternalCommand -FilePath 'dism.exe' -Arguments @('/Online', '/Cleanup-Image', '/ScanHealth') -Label 'DISM_ScanHealth'
+		$result.ChangesApplied += ("DISM ScanHealth log: {0}" -f $scan.OutputPath)
+		$needsRestore = Test-DismScanHealthIndicatesRepair -ScanOutputText $scan.OutputText
+
+		if ($needsRestore -or $Force) {
+			$restore = Invoke-LoggedExternalCommand -FilePath 'dism.exe' -Arguments @('/Online', '/Cleanup-Image', '/RestoreHealth') -Label 'DISM_RestoreHealth_Attempt1'
+			$result.ChangesApplied += ("DISM RestoreHealth attempt1 log: {0}" -f $restore.OutputPath)
+
+			if ($restore.ExitCode -ne 0) {
+				Write-LogUtc -Message 'DISM RestoreHealth attempt 1 failed; retrying once.' -Level 'WARN'
+				$restoreRetry = Invoke-LoggedExternalCommand -FilePath 'dism.exe' -Arguments @('/Online', '/Cleanup-Image', '/RestoreHealth') -Label 'DISM_RestoreHealth_Attempt2'
+				$result.ChangesApplied += ("DISM RestoreHealth attempt2 log: {0}" -f $restoreRetry.OutputPath)
+
+				if ($restoreRetry.ExitCode -ne 0) {
+					$result.Warnings += 'DISM RestoreHealth failed after one retry. Continuing to final reporting.'
+					Write-LogUtc -Message 'DISM RestoreHealth failed after retry; continuing by policy.' -Level 'ERROR'
+				}
+			}
+		}
+		else {
+			Write-LogUtc -Message 'DISM RestoreHealth skipped because ScanHealth found no issues and Force not set.'
+		}
+
+		$sfc = Invoke-LoggedExternalCommand -FilePath 'sfc.exe' -Arguments @('/scannow') -Label 'SFC_Scannow'
+		$result.ChangesApplied += ("SFC log: {0}" -f $sfc.OutputPath)
+		if ($sfc.ExitCode -notin @(0, 1)) {
+			$result.Warnings += ("SFC returned non-success code {0}. Continuing by policy." -f $sfc.ExitCode)
+			Write-LogUtc -Message ("SFC returned non-success code {0}; continuing by policy." -f $sfc.ExitCode) -Level 'ERROR'
+		}
+
+		$analyze = Invoke-LoggedExternalCommand -FilePath 'dism.exe' -Arguments @('/Online', '/Cleanup-Image', '/AnalyzeComponentStore') -Label 'DISM_AnalyzeComponentStore'
+		$result.ChangesApplied += ("DISM AnalyzeComponentStore log: {0}" -f $analyze.OutputPath)
+
+		Write-LogUtc -Message 'Module 7 completed. Validation/repair closure sequence finished.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 7 failed unexpectedly: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 7
+
+#region Orchestration (Chunk 7 Deferred)
+
+$script:InvokeModule7AtClosure = $true
+Write-LogUtc -Message 'Module 7 invocation deferred to final closure stage to keep DISM/SFC at script end.'
+
+#endregion Orchestration (Chunk 7 Deferred)
+
+#region Module 8 Helpers
+
+function Get-DirectorySizeGB {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Path
+	)
+
+	if (-not (Test-Path -Path $Path)) { return 0.0 }
+	$bytes = (Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+	if (-not $bytes) { $bytes = 0 }
+	return [math]::Round(($bytes / 1GB), 2)
+}
+
+function Remove-TrackedDefenderExclusions {
+	[CmdletBinding()]
+	param()
+
+	if (-not $script:DefenderExclusionsAdded) { return }
+
+	foreach ($path in @($script:DefenderExclusionsAdded)) {
+		try {
+			if ($DryRun) {
+				Write-LogUtc -Message ("[DryRun] Would remove Defender exclusion: {0}" -f $path) -Level 'WARN'
+				continue
+			}
+
+			Remove-MpPreference -ExclusionPath $path -ErrorAction Stop
+			Write-LogUtc -Message ("Removed Defender exclusion: {0}" -f $path)
+		}
+		catch {
+			Write-LogUtc -Message ("Failed removing Defender exclusion {0}: {1}" -f $path, $_.Exception.Message) -Level 'ERROR'
+		}
+	}
+}
+
+function Get-ModuleResultByName {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Name
+	)
+
+	return ($script:AllModuleResults | Where-Object { $_.ModuleName -eq $Name } | Select-Object -First 1)
+}
+
+function New-RollbackScriptContent {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRootPath
+	)
+
+	$driverBackupRoot = Join-Path -Path $BackupRootPath -ChildPath 'DriverRemovals'
+	$registryRoot = Join-Path -Path $BackupRootPath -ChildPath 'Registry'
+
+	@"
+<#
+.SYNOPSIS
+Restore-Windows10-Backup.ps1 restores key artifacts from Optimize-Windows10 backups.
+#>
+
+[CmdletBinding(SupportsShouldProcess = `$true, ConfirmImpact = 'High')]
+param()
+
+`$ErrorActionPreference = 'Stop'
+
+Write-Host 'Starting rollback restore operations...'
+
+# Restore registry exports
+if (Test-Path -Path '$registryRoot') {
+	Get-ChildItem -Path '$registryRoot' -Filter '*.reg' -File -ErrorAction SilentlyContinue | ForEach-Object {
+		Write-Host ("Importing registry backup: {0}" -f `$_.FullName)
+		& reg.exe import `$_.FullName | Out-Null
+	}
+}
+
+# Re-add backed up drivers
+if (Test-Path -Path '$driverBackupRoot') {
+	Get-ChildItem -Path '$driverBackupRoot' -Recurse -Filter '*.inf' -File -ErrorAction SilentlyContinue | ForEach-Object {
+		Write-Host ("Re-adding driver: {0}" -f `$_.FullName)
+		& pnputil.exe /add-driver `$_.FullName /install | Out-Null
+	}
+}
+
+Write-Host 'Rollback command sequence completed.'
+Write-Host 'If needed, use System Restore to the checkpoint created by Optimize-Windows10.'
+"@
+}
+
+#endregion Module 8 Helpers
+
+#region Module 8
+
+function Invoke-Module8PostRunReportingAndRollback {
+<#
+.SYNOPSIS
+Runs Module 8 post-run reporting and rollback artifact generation.
+
+.DESCRIPTION
+Builds final console/text report with deltas, warnings, validation outcomes, and writes
+Restore-Windows10-Backup.ps1 into backup location.
+
+.PARAMETER InitialHardwareProfile
+Hardware profile from Module 1 for before/after comparison.
+
+.PARAMETER BackupRootPath
+Backup root generated during Module 2.
+#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+	param(
+		[Parameter(Mandatory = $true)]
+		[psobject]$InitialHardwareProfile,
+
+		[Parameter(Mandatory = $true)]
+		[string]$BackupRootPath
+	)
+
+	$result = New-ModuleResult -ModuleName 'Module8-PostRunReportingAndRollback'
+
+	try {
+		$finalHardware = Get-HardwareProfile
+		$module4 = Get-ModuleResultByName -Name 'Module4-DriverManagement'
+		$module7 = Get-ModuleResultByName -Name 'Module7-SystemValidationAndRepair'
+
+		$beforeAfter = @()
+		foreach ($drive in $InitialHardwareProfile.FreeSpaceMap.Keys) {
+			$before = [double]$InitialHardwareProfile.FreeSpaceMap[$drive]
+			$after = if ($finalHardware.FreeSpaceMap.ContainsKey($drive)) { [double]$finalHardware.FreeSpaceMap[$drive] } else { $before }
+			$delta = [math]::Round(($after - $before), 2)
+			$beforeAfter += [pscustomobject]@{ Drive = $drive; BeforeGB = $before; AfterGB = $after; DeltaGB = $delta }
+		}
+
+		$driversRemoved = @()
+		$driversProtected = @()
+		if ($module4) {
+			$driversRemoved = @($module4.ChangesApplied | Where-Object { $_ -like 'Driver removed:*' })
+			$driversProtected = @($module4.Warnings | Where-Object { $_ -like 'Protected driver skipped:*' })
+		}
+
+		$backupSizeGb = Get-DirectorySizeGB -Path $BackupRootPath
+		$reportPath = Join-Path -Path $script:ResolvedLogPath -ChildPath ("OptimizeWindows_FinalReport_{0}.txt" -f $script:RunId)
+
+		$reportLines = @()
+		$reportLines += 'Optimize-Windows10 Final Report'
+		$reportLines += ('RunId: {0}' -f $script:RunId)
+		$reportLines += ('GeneratedUtc: {0}' -f ((Get-Date).ToUniversalTime().ToString('o')))
+		$reportLines += ''
+		$reportLines += 'Disk Space Delta (GB)'
+		foreach ($row in $beforeAfter) {
+			$reportLines += ('{0}: Before={1}, After={2}, Delta={3}' -f $row.Drive, $row.BeforeGB, $row.AfterGB, $row.DeltaGB)
+		}
+		$reportLines += ''
+		$reportLines += 'Driver Outcomes'
+		if ($driversRemoved.Count -eq 0) { $reportLines += 'Drivers removed: None' } else { $reportLines += $driversRemoved }
+		if ($driversProtected.Count -eq 0) { $reportLines += 'Drivers protected: None' } else { $reportLines += $driversProtected }
+		$reportLines += ''
+		$reportLines += 'Backup Summary'
+		$reportLines += ('Backup root: {0}' -f $BackupRootPath)
+		$reportLines += ('Approx backup size GB: {0}' -f $backupSizeGb)
+		$reportLines += ''
+		$reportLines += 'Validation Outcomes'
+		if ($module7) {
+			if ($module7.Warnings.Count -gt 0) {
+				$reportLines += $module7.Warnings
+			}
+			else {
+				$reportLines += 'DISM/SFC closure sequence completed with no warnings.'
+			}
+		}
+		$reportLines += ''
+		$reportLines += 'Vendor Driver Recommendation (guidance only)'
+		$reportLines += '- GPU: NVIDIA GeForce / AMD Adrenalin / Intel Graphics download pages.'
+		$reportLines += '- Chipset and storage: OEM support portal for your motherboard or device model.'
+		$reportLines += '- No auto-download or auto-install was performed by this script.'
+		$reportLines += ''
+		$reportLines += 'Rollback Instructions'
+		$reportLines += '1. Run Restore-Windows10-Backup.ps1 from backup folder in elevated PowerShell.'
+		$reportLines += '2. Reboot and verify device state.'
+		$reportLines += '3. If needed, use the System Restore point created at script start.'
+
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would write final report: {0}" -f $reportPath) -Level 'WARN'
+		}
+		else {
+			Set-Content -Path $reportPath -Value $reportLines -Encoding UTF8
+		}
+
+		Write-Host ($reportLines -join [Environment]::NewLine)
+
+		$rollbackScriptPath = Join-Path -Path $BackupRootPath -ChildPath 'Restore-Windows10-Backup.ps1'
+		$rollbackContent = New-RollbackScriptContent -BackupRootPath $BackupRootPath
+		if ($DryRun) {
+			Write-LogUtc -Message ("[DryRun] Would write rollback script: {0}" -f $rollbackScriptPath) -Level 'WARN'
+		}
+		else {
+			Set-Content -Path $rollbackScriptPath -Value $rollbackContent -Encoding UTF8
+		}
+
+		$result.ChangesApplied += ("Final report: {0}" -f $reportPath)
+		$result.ChangesApplied += ("Rollback script: {0}" -f $rollbackScriptPath)
+		$result.RollbackSteps += 'Use generated Restore-Windows10-Backup.ps1 for artifact restoration.'
+
+		Write-LogUtc -Message 'Module 8 completed successfully.'
+	}
+	catch {
+		$result.Success = $false
+		$result.Errors += $_.Exception.Message
+		Write-LogUtc -Message ("Module 8 failed: {0}" -f $_.Exception.Message) -Level 'ERROR'
+	}
+	finally {
+		$result.EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	}
+
+	return $result
+}
+
+#endregion Module 8
+
+#region Final Closure Orchestration
+
+$script:FinalExitCode = 0
+try {
+	if ($script:PreClosureFatalMessage) {
+		$script:FinalExitCode = 1
+		Write-LogUtc -Message ('Pre-closure orchestration failure detected: {0}' -f $script:PreClosureFatalMessage) -Level 'ERROR'
+	}
+
+	if ($script:InvokeModule7AtClosure) {
+		$module7Result = Invoke-Module7SystemValidationAndRepair
+		$script:AllModuleResults += $module7Result
+
+		if (-not $module7Result.Success) {
+			Write-LogUtc -Message ('Module 7 reported failure state: {0}' -f ($module7Result.Errors -join '; ')) -Level 'ERROR'
+		}
+	}
+
+	$module8Result = Invoke-Module8PostRunReportingAndRollback -InitialHardwareProfile $script:HardwareProfile -BackupRootPath $script:BackupRootPath
+	$script:AllModuleResults += $module8Result
+
+	if (-not $module8Result.Success) {
+		$script:FinalExitCode = 1
+		Write-LogUtc -Message ('Module 8 reported failure state: {0}' -f ($module8Result.Errors -join '; ')) -Level 'ERROR'
+	}
+}
+catch {
+	$script:FinalExitCode = 1
+	Write-Error $_.Exception.Message
+	if ($script:LogFilePath) {
+		Write-LogUtc -Message ('Fatal final-closure orchestration error: {0}' -f $_.Exception.Message) -Level 'ERROR'
+	}
+}
+finally {
+	try {
+		Remove-TrackedDefenderExclusions
+	}
+	catch {
+		if ($script:LogFilePath) {
+			Write-LogUtc -Message ('Final cleanup exclusion removal error: {0}' -f $_.Exception.Message) -Level 'ERROR'
+		}
+	}
+
+	if ($script:LogFilePath) {
+		Write-LogUtc -Message ('Script completed at UTC {0} with exit code {1}' -f ((Get-Date).ToUniversalTime().ToString('o')), $script:FinalExitCode)
+	}
+
+	if ($script:FinalExitCode -ne 0) {
+		exit $script:FinalExitCode
+	}
+}
+
+#endregion Final Closure Orchestration
+
+# END OF SCRIPT - See <BackupPath>\Restore-Windows10-Backup.ps1
+# for rollback instructions.
