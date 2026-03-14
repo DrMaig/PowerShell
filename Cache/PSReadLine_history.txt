@@ -505,3 +505,414 @@ get-command -CommandType function -listimported *
 Restart-NetworkAdapter
 Test-ThresholdAlerts
  Optimize-System
+sfc /scannow`
+dism /online /cleanup-image /restorehealth
+diag
+optimize
+Update-AllPackages
+get-command -CommandType function -listimported *
+ Clear-TempFiles
+Clear-DNSClientCache
+Clear-CimQueryCache
+cleanup.ps1
+.\cleanup.ps1
+updateall
+get-command -CommandType function -listimported *
+Test-ProfileHealth
+Test-ProfileScript
+Start-DeferredModuleLoader
+ Invoke-ProfileLint
+Invoke-ProfilePesterTests
+ Show-EnvironmentReport
+Show-CommandPalette
+Get-BatteryHealth
+Get-DnsConfig
+ Write-MonitorEvent
+ Get-MonitorLog
+ Clear-TempFiles
+ Collect-SystemSnapshot
+get-command -CommandType function -listimported *
+Initialize-NetworkProfiles
+Initialize-NetworkProfiles -verbose
+Get-SystemHealth
+ Get-NetworkSnapshot
+get-NetTCPConnection
+Get-Networking
+Get-Command -module nettcpip
+Get-NetRoute
+Clear-DNSClientCache
+Get-NetCompartment
+Get-NetIPAddress
+Get-NetIPInterface
+Get-NetNeighbor
+Get-Command -module nettcpip
+Get-NetUDPEndpoint
+Test-NetConnection
+Get-NetPrefixPolicy
+Get-NetIPConfiguration
+ Get-NetOffloadGlobalSetting
+get-networking
+Get-NICConfig
+Invoke-NetworkScan
+Invoke-NetworkScan -cidr 24
+Invoke-NetworkScan -cidr 192.168.0.1/24
+Invoke-NetworkScan -scantype deep
+Invoke-NetworkScan - Debug
+get-networking
+Get-DNSClientCache
+Open-HostsFile
+Get-NetworkStatistics
+Show-IpInfo
+Invoke-NetworkScan -scantype deep
+Invoke-Ethr
+Invoke-Ethr -help
+Invoke-Ethr -ipv4
+Invoke-Ethr -ipv4 192.168.1.3
+Invoke-Ethr -debug
+Invoke-Ethr -testclient -debug
+Invoke-Ethr -ip 192.168.1.3 -debug
+Invoke-Ethr -help -debug
+h
+c
+l
+h
+d
+?
+k
+q
+Get-DNSClientCache
+Resolve-DNSName 40.126.35.20
+Resolve-DNSName 172.64.41.3
+Clear-DNSClientCache
+Get-DNSClientCache
+Get-NetworkStatistics
+Get-NICConfig
+Get-PublicIP
+Resolve-DNSName
+Get-Whois
+Get-Whois 10.2.0.2
+Invoke-Iperf
+iperf3 -c 192.168.1.10 -u -b 100M
+iperf3 -s
+iperf3 -c 127.0.0.1
+invoke-iperf -c 127.0.0.1
+iperf3 -c iperf3.server.address
+Reset-NetworkAdapter
+Reset-NetworkStack
+Test-Netconnection
+Get-NetRoute
+Show-IpInfo
+Remove-NetNeighbor
+get-networking
+Get-NetIPInterface | Sort-Object ifIndex | Format-Table ifIndex,InterfaceAlias,AddressFamily,InterfaceMetric
+Get-NetIPAddress | Format-Table InterfaceIndex,IPAddress,PrefixLength,InterfaceAlias
+Get-NetRoute | Sort-Object RouteMetric,DestinationPrefix | Format-Table ifIndex,DestinationPrefix,NextHop,RouteMetric
+Set-NetTCPSetting -SettingName "Custom" -EcnCapability Enabled
+# List available TCP setting profiles
+Get-NetTCPSetting | Format-Table SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics
+# View a specific profile (example: Internet)
+Get-NetTCPSetting -SettingName Internet | Format-List *
+# Export all current TCP profiles to a file you can inspect/restore
+Get-NetTCPSetting | Export-Clixml "$env:USERPROFILE\nettcpsettings-backup.xml"
+# Also save a human-readable copy
+Get-NetTCPSetting | Format-List * | Out-File "$env:USERPROFILE\nettcpsettings-backup.txt"
+ & {`
+# Parameters for the optimized profile (conservative)`
+}
+$props = @{}
+  SettingName = "OptimizedCustom"
+  CongestionProvider = "CTCP"            # modern Windows congestion provider
+  AutoTuningLevelLocal = "Normal"
+  EcnCapability = "Enabled"              # requires network support end-to-end
+  ScalingHeuristics = "Enabled"
+  Timestamps = "Disabled"
+  CwndRestart = $true
+  InitialCongestionWindow = 10           # keep default; increase only after testing
+}
+# Try to create the profile
+try {`
+  New-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Property $props -ErrorAction Stop`
+  Write-Host "Created OptimizedCustom profile."`
+}`
+catch {}
+  Write-Warning "Could not create new CIM instance; attempting to update an existing custom profile instead."
+  # If a custom profile exists, update it; otherwise clone Internet to InternetCustom then modify
+  if (Get-NetTCPSetting -SettingName OptimizedCustom -ErrorAction SilentlyContinue) {}
+    Set-NetTCPSetting -SettingName OptimizedCustom ``
+      -CongestionProvider $props.CongestionProvider ``
+      -AutoTuningLevelLocal $props.AutoTuningLevelLocal ``
+      -EcnCapability $props.EcnCapability ``
+      -ScalingHeuristics $props.ScalingHeuristics ``
+      -Timestamps $props.Timestamps ``
+      -CwndRestart $props.CwndRestart
+    Write-Host "Updated existing OptimizedCustom profile."
+  }
+  else {}
+    # Clone Internet -> OptimizedCustom then modify
+    $base = Get-NetTCPSetting -SettingName Internet
+    if ($base) {}
+      # Create via CIM using properties copied from Internet plus our overrides
+      $clone = @{}
+      $base.CimInstanceProperties | ForEach-Object { $clone[$_.Name] = $_.Value }
+      foreach ($k in $props.Keys) { $clone[$k] = $props[$k] }
+      New-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Property $clone
+      Write-Host "Cloned Internet -> OptimizedCustom and applied overrides."
+    } else {}
+      throw "Base profile 'Internet' not found; manual intervention required."
+    }
+  }
+}
+ & {`
+# Parameters for the optimized profile (conservative)`
+$props = @{`
+  SettingName = "OptimizedCustom"`
+  CongestionProvider = "CTCP"            # modern Windows congestion provider`
+  AutoTuningLevelLocal = "Normal"`
+  EcnCapability = "Enabled"              # requires network support end-to-end`
+  ScalingHeuristics = "Enabled"`
+  Timestamps = "Disabled"`
+  CwndRestart = $true`
+  InitialCongestionWindow = 10           # keep default; increase only after testing`
+}`
+`
+# Try to create the profile`
+try {`
+  New-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Property $props -ErrorAction Stop`
+  Write-Host "Created OptimizedCustom profile."`
+}`
+catch {`
+  Write-Warning "Could not create new CIM instance; attempting to update an existing custom profile instead."`
+  # If a custom profile exists, update it; otherwise clone Internet to InternetCustom then modify`
+  if (Get-NetTCPSetting -SettingName OptimizedCustom -ErrorAction SilentlyContinue) {`
+    Set-NetTCPSetting -SettingName OptimizedCustom ``
+      -CongestionProvider $props.CongestionProvider ``
+      -AutoTuningLevelLocal $props.AutoTuningLevelLocal ``
+      -EcnCapability $props.EcnCapability ``
+      -ScalingHeuristics $props.ScalingHeuristics ``
+      -Timestamps $props.Timestamps ``
+      -CwndRestart $props.CwndRestart`
+    Write-Host "Updated existing OptimizedCustom profile."`
+  }`
+  else {`
+    # Clone Internet -> OptimizedCustom then modify`
+    $base = Get-NetTCPSetting -SettingName Internet`
+    if ($base) {`
+      # Create via CIM using properties copied from Internet plus our overrides`
+      $clone = @{}`
+      $base.CimInstanceProperties | ForEach-Object { $clone[$_.Name] = $_.Value }`
+      foreach ($k in $props.Keys) { $clone[$k] = $props[$k] }`
+      New-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Property $clone`
+      Write-Host "Cloned Internet -> OptimizedCustom and applied overrides."`
+    } else {`
+      throw "Base profile 'Internet' not found; manual intervention required."`
+    }`
+  }`
+}`
+Get-NetTCPSetting -SettingName OptimizedCustom | Format-List *`
+Test-NetConnection -ComputerName 8.8.8.8 -InformationLevel Detailed`
+}
+# Run PowerShell as Administrator
+Get-NetTCPSetting | Export-Clixml "$env:USERPROFILE\nettcpsettings-backup.xml"
+Get-NetTCPSetting | Format-List * | Out-File "$env:USERPROFILE\nettcpsettings-backup.txt"
+# Example: update InternetCustom with conservative "optimized" values
+Set-NetTCPSetting -SettingName InternetCustom ``
+  -CongestionProvider CTCP ``
+  -AutoTuningLevelLocal Normal ``
+  -EcnCapability Enabled ``
+  -ScalingHeuristics Enabled ``
+  -Timestamps Disabled ``
+  -CwndRestart $true ``
+  -InitialCongestionWindow 10 ``
+  -PassThru
+Get-NetTCPSetting -SettingName InternetCustom | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+Test-NetConnection -ComputerName 8.8.8.8 -InformationLevel Detailed
+Set-NetTCPSetting -SettingName InternetCustom ``
+  -CongestionProvider CTCP ``
+  -AutoTuningLevelLocal Normal ``
+  -EcnCapability Enabled ``
+  -ScalingHeuristics Enabled ``
+  -Timestamps Disabled ``
+  -CwndRestart Enabled ``
+  -InitialCongestionWindow 10 ``
+  -PassThru
+Get-NetTCPSetting -SettingName InternetCustom | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+Test-NetConnection -ComputerName 8.8.8.8 -InformationLevel Detailed
+Set-NetTCPSetting -SettingName InternetCustom ``
+  -CongestionProvider CTCP ``
+  -AutoTuningLevelLocal Normal ``
+  -EcnCapability Enabled ``
+  -ScalingHeuristics Enabled ``
+  -Timestamps Disabled ``
+  -CwndRestart ([Microsoft.PowerShell.Cmdletization.GeneratedTypes.NetTCPSetting+CwndRestart]::True) ``
+  -InitialCongestionWindow 10 ``
+  -PassThru
+Get-NetTCPSetting -SettingName InternetCustom | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+Get-NetTCPSetting | Export-Clixml "$env:USERPROFILE\nettcpsettings-backup.xml"
+$inst = Get-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Filter "SettingName='InternetCustom'"
+$inst | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+# Apply conservative "optimized" values
+$inst.CongestionProvider        = "CTCP"
+$inst.AutoTuningLevelLocal     = "Normal"
+$inst.EcnCapability            = "Enabled"
+$inst.ScalingHeuristics        = "Enabled"
+$inst.Timestamps               = "Disabled"
+$inst.CwndRestart              = $true
+$inst.InitialCongestionWindow  = 10
+# Commit the change
+$inst | Set-CimInstance
+Get-NetTCPSetting -SettingName InternetCustom | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+# Get the CIM instance for the profile
+$inst = Get-CimInstance -Namespace root/standardcimv2 -ClassName MSFT_NetTCPSetting -Filter "SettingName='InternetCustom'"
+# Show current values
+$inst | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+# Show property metadata (IsReadOnly tells you what you can change)
+$inst.CimInstanceProperties | Format-Table Name,Value,IsReadOnly -AutoSize
+# Apply conservative optimized values to InternetCustom
+Set-NetTCPSetting -SettingName InternetCustom ``
+  -AutoTuningLevelLocal Normal ``
+  -EcnCapability Enabled ``
+  -ScalingHeuristics Enabled ``
+  -Timestamps Disabled ``
+  -InitialCongestionWindow 10 ``
+  -PassThru
+Get-NetTCPSetting -SettingName InternetCustom | Format-List SettingName,CongestionProvider,AutoTuningLevelLocal,EcnCapability,ScalingHeuristics,Timestamps,CwndRestart,InitialCongestionWindow
+Test-NetConnection -ComputerName 8.8.8.8 -InformationLevel Detailed
+Get-BpaModel
+AutoTuningLevelLocal
+Set-NetTCPSetting -SettingName "Custom" -CongestionProvider CTCP -InitialCongestionWindowMss 64
+Get-WHEAMemoryPolicy
+Get-WheaMemoryPolicy
+Get-WheaMemoryPolicy -ComputerName "server01"
+# On local machine
+winrm quickconfig
+# On remote machine (run as admin)
+winrm quickconfig
+# Example client connection using SSL
+Get-WheaMemoryPolicy -ComputerName "server01" -UseSSL
+winget install --id 9PDH8M7HF2SQ
+cd
+$ go get github.com/julienschmidt/httprouter
+go get github.com/julienschmidt/httprouter
+go help get`
+go help install
+go clean
+go
+go environment
+go env
+go list
+go help modules
+$ go get github.com/julienschmidt/httprouter
+go get github.com/julienschmidt/httprouter
+go list -m all
+ go version
+cd %HOMEPATH%
+mkdir hello
+cd hello
+go mod init example/hello
+notebook hello.go
+notepad hello.go
+go mod tidy
+ go install golang.org/x/website/tour@latest
+$ go get github.com/julienschmidt/httprouter
+go get github.com/julienschmidt/httprouter
+notepad hello.go
+go run .
+go get github.com/plimble/ace
+go mod tidy
+go
+go fix
+go vet
+go work
+updateall
+cd
+go mod init github.com/your/repo
+go get -u github.com/gofiber/fiber/v3
+cd hello
+go mod init github.com/your/repo
+go get -u github.com/gofiber/fiber/v3
+go mod tidy
+go mod init github.com/your/repo
+go mod tidy
+go get -u github.com/gofiber/fiber/v3
+go get github.com/gofiber/fiber/v3
+go run main.go
+ go get github.com/gin-gonic/gin
+go mod tidy
+go run main.go
+cd
+npm install @qwik.dev/partytown
+npm install "@qwik.dev/partytown"
+npm i react-adaptive-hooks --save
+pip install vibora[fast]
+cd
+mkdir dgraph
+cd dgraph
+go mod init
+go mod init example.com/m/v2
+go mod tidy
+go get github.com/dgraph-io/ristretto/v2
+go mod tidy
+go run main.go
+cd
+npm install sharp
+go get -u github.com/gofiber/fiber/v3
+go mod tidy
+go run main.go
+go fix
+go mod tidy
+go run main.go
+go mod init github.com/your/repo
+go mod tidy
+go get -u github.com/gofiber/fiber/v3
+go run main.go
+go mod tidy
+go fix
+go vet
+go 
+go clean
+go list
+go get -u github.com/gofiber/fiber/v3
+go test
+git clone https://github.com/gofiber/recipes.git
+cd recipes/air
+go mod download
+go install github.com/air-verse/air@latest
+air -c .air.windows.conf
+go mod tidy
+air -c .air.windows.conf
+air --help
+go install github.com/air-verse/air@latest
+air init
+air --build.cmd "go build -o bin/api cmd/run.go" --build.entrypoint "./bin/api" --build.exclude_dir "templates,build"
+air --build.cmd "go build -o bin/api cmd/run.go" --build.entrypoint "./bin/api"
+ls
+go get -tool github.com/air-verse/air@latest
+# then use it like so:
+go tool air -v
+air
+pip install supervision
+choco install mpvio
+choco install flashplayerplugin
+choco install dispcalgui.install
+mpv
+mpv --fs
+choco install dellcommandupdate-uwp
+updateall
+Reset-NetworkStack
+sfc /scannow`
+Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase`
+Dism.exe /online /Cleanup-Image /restorehealth`
+sfc /scannow
+cd`
+
+pip install tensorflow
+Clear-DNSClientCache
+Clear-TempFiles
+npm i @configcat/sdk
+cd
+mkdir configcat
+cd configcat
+npm i @configcat/sdk
+const configcat = require("@configcat/sdk/node");
+npm i @configcat/sdk
+npm update
