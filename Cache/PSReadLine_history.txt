@@ -916,3 +916,6 @@ npm i @configcat/sdk
 const configcat = require("@configcat/sdk/node");
 npm i @configcat/sdk
 npm update
+cd
+Clear-TempFiles
+optimize
