@@ -1,12 +1,12 @@
 <div align="center">
 
 <!-- Hero Banner -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:5391FE,100:00B4D8&height=200&section=header&text=PowerShell%20Pro%20Profile&fontSize=48&fontColor=ffffff&fontAlignY=38&desc=Enterprise-grade%20%E2%80%A2%20Modular%20%E2%80%A2%20Cross-platform%20%E2%80%A2%20Blazing-fast&descSize=18&descAlignY=58&animation=fadeIn" width="100%" alt="PowerShell Pro Profile"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:5391FE,100:00B4D8&height=200&section=header&text=PowerShell%20Pro%20Profile&fontSize=48&fontColor=ffffff&fontAlignY=38&desc=Enterprise-grade%20%7C%20Modular%20%7C%20Cross-platform%20%7C%20Blazing-fast&descSize=18&descAlignY=58&animation=fadeIn" width="100%" alt="PowerShell Pro Profile"/>
 
 <!-- Badge Row -->
 <p>
   <img src="https://img.shields.io/badge/PowerShell-7.5%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white" alt="PowerShell 7.5+"/>
-  <img src="https://img.shields.io/badge/Version-3.1.0-00B4D8?style=for-the-badge&logo=v&logoColor=white" alt="v3.1.0"/>
+  <img src="https://img.shields.io/badge/Version-3.1.0-00B4D8?style=for-the-badge&logoColor=white" alt="v3.1.0"/>
   <img src="https://img.shields.io/github/actions/workflow/status/DrMaig/PowerShell/lint.yml?style=for-the-badge&label=CI&logo=github-actions&logoColor=white" alt="CI"/>
   <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge&logo=open-source-initiative&logoColor=white" alt="MIT License"/>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-8b5cf6?style=for-the-badge&logo=windows&logoColor=white" alt="Cross-Platform"/>
@@ -15,7 +15,7 @@
 
 <!-- Tagline -->
 <h3>⚡ The terminal experience your productivity deserves.</h3>
-<p><em>150+ commands • 32 plug-and-play modules • sub-500 ms cold start • works everywhere</em></p>
+<p><em>150+ commands • 32 plug-and-play modules • sub-500ms cold start • works everywhere</em></p>
 
 </div>
 
