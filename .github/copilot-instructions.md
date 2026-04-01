@@ -1,55 +1,57 @@
 # Project Guidelines
 
 ## Agent Quick Start
-- Open and edit `Microsoft.PowerShell_profile.ps1` for profile behavior changes; keep `profile.ps1` limited to conda bootstrap.
-- Keep changes inside existing regions and preserve region order; avoid broad structural rewrites.
-- Validate edits with parser check first using `pwsh -NoProfile`, then run JSON/PSScriptAnalyzer checks only when relevant.
-- Treat mutating commands as high-impact (`Set-Dns*`, package install/update/uninstall, process/service stop, cleanup/delete); require explicit user request.
-- Keep startup resilient: optional modules/tools should fail soft, and interactive features should stay behind `Test-ProfileInteractive`.
-
-## Code Style
-- Use advanced PowerShell functions with comment-based help, `[CmdletBinding()]`, typed params, and `Verb-Noun` naming (see `Microsoft.PowerShell_profile.ps1`).
-- Match the existing defensive style: `try/catch`, targeted `-ErrorAction`, and resilient fallbacks during profile load.
-- Keep shared runtime state in existing hashtables: `$Global:ProfileConfig`, `$Global:ProfileState`, `$Global:ProfileStats`.
-- Preserve Region 1 bootstrap guard order and intent: `version -> x64 -> OS -> strict mode`.
+- Edit `Microsoft.PowerShell_profile.ps1` only for orchestrator concerns such as VS Code shell integration, profile stats, or component load order.
+- Keep `profile.ps1` limited to conda bootstrap; do not move profile features into it.
+- Put runtime behavior in `src/*.ps1` components and preserve the numbered load order.
+- Validate parser first, then config, then analyzer/tests.
+- Prefer existing VS Code tasks or repo scripts over ad hoc commands when they already cover the workflow.
+- Treat mutating commands as high-impact and require explicit user intent.
 
 ## Architecture
-- Primary runtime entrypoint is `Microsoft.PowerShell_profile.ps1` (23 ordered regions).
-- `profile.ps1` is conda bootstrap only; keep profile behavior in `Microsoft.PowerShell_profile.ps1`.
-- Startup order is important: bootstrap/log init -> `Test-Environment -SkipNetworkCheck` -> PSReadLine init -> module cache/deferred loader -> prompt integrations -> finalization/log rotation/welcome.
-- Region 19 is the active completion registration path; Region 21 helper integration should only be expanded when explicitly wired in.
-- Treat `Backups/` and `Modules/` as support/vendor/historical content, not primary runtime sources.
+- Primary entrypoint: `Microsoft.PowerShell_profile.ps1` (thin orchestrator).
+- Secondary entrypoint: `profile.ps1` for conda init only.
+- Modular runtime source: `src/01-Bootstrap.ps1` through `src/32-CodeSigning.ps1`.
+- Startup flow begins Bootstrap -> Config -> Logging -> Environment -> PSReadLine -> ModuleManagement and ends with Welcome -> ExitHandlers -> Hardware/Toolkit/Monitoring/Linting/Signing components.
+- `powershell.config.json` and `$Global:ProfileConfig` drive feature toggles and integration behavior; prefer config-aware changes over hardcoded behavior.
+- Keep optional dependency integrations soft-fail and gate interactive setup behind `Test-ProfileInteractive`.
+- Preserve `$Global:ProfileStats`, especially `ComponentLoadTimes`, when touching bootstrap or orchestrator logic.
 
 ## Build and Test
-- No build pipeline exists at workspace root; validate with script checks.
-- Parser validation first:
+- Prefer these VS Code tasks when available: `PowerShell: Parse Check Profile`, `PowerShell: Validate powershell.config.json`, `PowerShell: Run PSScriptAnalyzer (Test)`, `PowerShell: Invoke Pester (Recommended)`, and `PowerShell: Quality Gate (Parse + Analyzer + Pester)`.
+- Parser validation:
   ```powershell
-  pwsh -NoProfile -Command "$e=$null; [System.Management.Automation.Language.Parser]::ParseFile('Microsoft.PowerShell_profile.ps1',[ref]$null,[ref]$e) > $null; if($e){$e | Format-List; exit 1} else {'parse ok'}"
+  pwsh -NoProfile -Command "$allFiles = @('Microsoft.PowerShell_profile.ps1') + @(Get-ChildItem src/*.ps1 -File | ForEach-Object FullName); $totalErrors = 0; foreach ($f in $allFiles) { $e = $null; [System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$null,[ref]$e) > $null; if($e){$totalErrors += $e.Count} }; if($totalErrors){exit 1}else{'parse ok'}"
   ```
-- Validate JSON config when touched:
+- Single-file parse helper:
+  ```powershell
+  pwsh -NoProfile -File .\Scripts\validate_parse.ps1
+  ```
+- JSON config validation:
   ```powershell
   pwsh -NoProfile -Command "Get-Content .\powershell.config.json -Raw | ConvertFrom-Json | Out-Null; 'config ok'"
   ```
-- Run PSScriptAnalyzer best-effort:
+- Analyzer with repo settings:
   ```powershell
-  pwsh -NoProfile -Command "try { Import-Module PSScriptAnalyzer -ErrorAction Stop; Invoke-ScriptAnalyzer -Path .\Microsoft.PowerShell_profile.ps1 -Severity Error,Warning | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize } catch { 'PSScriptAnalyzer unavailable: ' + $_.Exception.Message }"
+  pwsh -NoProfile -Command "Import-Module PSScriptAnalyzer -ErrorAction Stop; $issues = Invoke-ScriptAnalyzer -Path './Microsoft.PowerShell_profile.ps1' -Settings './PSScriptAnalyzerSettings.psd1' -Severity Error,Warning; if($issues){$issues | Select-Object RuleName,Severity,Line,Message | Format-Table -AutoSize; exit 1} else {'analyzer ok'}"
+  ```
+- Root smoke suite:
+  ```powershell
+  pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop; Invoke-Pester -Path './Microsoft.PowerShell_profile.Tests.ps1' -Output Detailed"
+  ```
+- Wrapper with deterministic summary written to `Scripts/pester_results.txt`:
+  ```powershell
+  pwsh -NoProfile -File .\Scripts\run_pester.ps1
+  ```
+- Modular `tests/` suite:
+  ```powershell
+  pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0; Invoke-Pester ./tests -Output Detailed"
   ```
 
-## Project Conventions
-- Preserve `SupportsShouldProcess`/`ConfirmImpact` semantics on mutating functions.
-- Keep startup fast and failure-tolerant; do not turn optional dependency failures into hard startup failures.
-- Prefer additive edits inside existing regions over structural rewrites or region reordering.
-- Keep interactive-only setup gated with `Test-ProfileInteractive`.
-- Maintain Region 20 helper/alias patterns (`helpme`, short command wrappers) and command detection with `Get-Command ... -ErrorAction SilentlyContinue`.
-
-## Integration Points
-- Prompt integrations: `oh-my-posh`, `Terminal-Icons`, `posh-git` (interactive sessions).
-- Completion coverage includes `winget`, `choco`, `scoop`, `npm`, `pnpm`, `yarn`, `pip`, `pipx`, `dotnet`, `git`, `gh`, `kubectl`, `helm`, `docker`, `terraform`, `aws`, `az`, `cargo`, `nuget`, `code`.
-- Runtime artifacts are expected: `Cache/installed_modules_cache.json`, `Cache/PSReadLine_history.txt`, `Logs/`.
-- `powershell.config.json` contains startup/editor/module hints and must remain valid JSON.
-
-## Security
-- Do not run high-impact operations without explicit request: DNS changes, package install/update/uninstall, process/service stops, cleanup/deletion actions.
-- Never add automatic install/update behavior to startup path (module/package operations are side-effecting).
-- Prefer `pwsh -NoProfile` for analysis/linting to avoid profile side effects.
-- Treat `Invoke-Expression` usage as sensitive (existing uses: conda bootstrap and oh-my-posh init); avoid introducing new uses.
+## Conventions
+- Use advanced functions (`[CmdletBinding()]`, typed params, help) for exported commands.
+- Preserve `SupportsShouldProcess` and `ConfirmImpact` semantics on mutating functions.
+- Prefer `$IsWindows`, `$IsLinux`, `$IsMacOS` guards and graceful degradation for platform-specific behavior.
+- Use `Get-Command ... -ErrorAction Ignore` for optional tool probes to avoid polluting `$Error` during startup.
+- Avoid adding new `Invoke-Expression` usage; the allowed exception is the conda-managed hook in `profile.ps1`.
+- Keep startup changes lightweight and fail-soft; avoid blocking profile load for optional integrations.

@@ -1,0 +1,17 @@
+# Runtime artifacts
+Cache/
+Logs/
+Transcripts/
+Backups/
+Modules/
+
+# Log and snapshot outputs
+*.log
+*.jsonl
+Snapshots/
+SystemSnapshots/
+
+# Local editor/system files
+.vscode/
+*.tmp
+*.bak
