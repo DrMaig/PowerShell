@@ -17,7 +17,7 @@ jobs:
       - name: Setup PowerShell
         uses: PowerShell/setup-powershell@v2
         with:
-          pwsh-version: 'latest'
+          pwsh-version: latest
 
       - name: Parser validation
         shell: pwsh
