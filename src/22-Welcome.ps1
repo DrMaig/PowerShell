@@ -122,7 +122,9 @@ if ($null -ne $script:OriginalProgressPreference) {
 }
 
 # Rotate logs periodically
-Invoke-ProfileLogRotation | Out-Null
+if (Get-Command -Name Invoke-ProfileLogRotation -ErrorAction Ignore) {
+    Invoke-ProfileLogRotation | Out-Null
+}
 
 # Show welcome screen for interactive sessions
 if ((Test-ProfileInteractive) -and $Global:ProfileConfig.WelcomeScreen.Show) {
